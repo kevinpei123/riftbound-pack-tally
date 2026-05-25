@@ -97,4 +97,11 @@ dependencies {
 
     // Image loading
     implementation(libs.coil.compose)
+
+    // Unit tests
+    testImplementation(libs.junit.jupiter)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }

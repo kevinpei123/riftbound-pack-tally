@@ -1,7 +1,6 @@
 package com.riftbound.packtally.core.ocr
 
 import android.graphics.Bitmap
-import android.graphics.Rect
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
@@ -36,7 +35,7 @@ object OcrService {
                 val box = mlBlock.boundingBox ?: return@mapNotNull null
                 TextBlock(
                     text = mlBlock.text,
-                    bounds = box,
+                    bounds = BoundingBox(box.left, box.top, box.right, box.bottom),
                     confidence = (mlBlock.text.length * 0.05f).coerceAtMost(0.95f),
                 )
             }
@@ -46,6 +45,16 @@ object OcrService {
 
 data class TextBlock(
     val text: String,
-    val bounds: Rect,
+    val bounds: BoundingBox,
     val confidence: Float,
 )
+
+data class BoundingBox(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+) {
+    val width: Int get() = right - left
+    val height: Int get() = bottom - top
+}
