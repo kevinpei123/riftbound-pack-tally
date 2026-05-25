@@ -12,11 +12,15 @@ import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Header
-import retrofit2.http.Path
 import retrofit2.http.Query
 import java.time.Instant
 
 private const val DEFAULT_BASE_URL = "https://api.tcgapi.dev/v1/"
+private const val GAME_SLUG = "riftbound"
+
+private const val PRINTING_NORMAL = "Normal"
+private const val PRINTING_FOIL = "Foil"
+private const val PRINTING_SIGNATURE = "Signature"
 
 class HttpPricingRepository(
     private val settings: SettingsRepository,
@@ -38,20 +42,37 @@ class HttpPricingRepository(
     ): Result<CardPrice> = runCatching {
         val apiKey = settings.getApiKey()
             ?: error("Missing tcgapi.dev API key — set it in Settings")
-        val dto = api.getPrice(
-            authHeader = "Bearer $apiKey",
-            cardId = card.id,
-            foil = foil,
-            signature = signature,
+        val printing = printingFor(foil, signature)
+        val query = "${card.setCode}-${card.collectorNumber}"
+
+        val response = api.search(
+            apiKey = apiKey,
+            q = query,
+            game = GAME_SLUG,
+            printing = printing,
         )
+
+        val match = response.data.firstOrNull()
+            ?: error("No tcgapi.dev result for $query ($printing)")
+
+        val lastUpdated = match.lastUpdatedAt
+            ?.let { runCatching { Instant.parse(it) }.getOrNull() }
+            ?: error("tcgapi.dev response missing last_updated_at for $query")
+
         CardPrice(
-            marketPrice = dto.marketPrice,
-            lowPrice = dto.lowPrice,
-            midPrice = dto.midPrice,
-            highPrice = dto.highPrice,
-            currency = dto.currency,
-            lastUpdated = Instant.parse(dto.lastUpdated),
+            marketPrice = match.marketPrice,
+            lowPrice = match.lowPrice,
+            midPrice = match.medianPrice,
+            highPrice = match.lowestWithShipping,
+            currency = "USD",
+            lastUpdated = lastUpdated,
         )
+    }
+
+    private fun printingFor(foil: Boolean, signature: Boolean): String = when {
+        signature -> PRINTING_SIGNATURE
+        foil -> PRINTING_FOIL
+        else -> PRINTING_NORMAL
     }
 
     private companion object {
@@ -69,21 +90,30 @@ class HttpPricingRepository(
 }
 
 private interface TcgApi {
-    @GET("cards/{id}/price")
-    suspend fun getPrice(
-        @Header("Authorization") authHeader: String,
-        @Path("id") cardId: String,
-        @Query("foil") foil: Boolean,
-        @Query("signature") signature: Boolean,
-    ): PriceDto
+    /**
+     * tcgapi.dev's documented entry point for single-card lookup with prices embedded.
+     * Auth is via `X-API-Key` per their quickstart.
+     */
+    @GET("search")
+    suspend fun search(
+        @Header("X-API-Key") apiKey: String,
+        @Query("q") q: String,
+        @Query("game") game: String,
+        @Query("printing") printing: String,
+    ): SearchResponse
 }
 
 @Serializable
-private data class PriceDto(
-    @SerialName("marketPrice") val marketPrice: Double,
-    @SerialName("lowPrice") val lowPrice: Double,
-    @SerialName("midPrice") val midPrice: Double,
-    @SerialName("highPrice") val highPrice: Double,
-    @SerialName("currency") val currency: String = "USD",
-    @SerialName("lastUpdated") val lastUpdated: String,
+private data class SearchResponse(
+    val data: List<TcgPriceDto> = emptyList(),
+)
+
+@Serializable
+private data class TcgPriceDto(
+    val id: Long = 0,
+    @SerialName("market_price") val marketPrice: Double = 0.0,
+    @SerialName("low_price") val lowPrice: Double = 0.0,
+    @SerialName("median_price") val medianPrice: Double = 0.0,
+    @SerialName("lowest_with_shipping") val lowestWithShipping: Double = 0.0,
+    @SerialName("last_updated_at") val lastUpdatedAt: String? = null,
 )
