@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -22,26 +23,32 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.riftbound.packtally.model.BoxSession
+import com.riftbound.packtally.model.PackSession
 import com.riftbound.packtally.model.ScannedEntry
 
 @Composable
 fun PackScreen() {
     val activity = LocalContext.current as ComponentActivity
     val packVm: PackViewModel = viewModel(viewModelStoreOwner = activity)
-    val session by packVm.session.collectAsStateWithLifecycle()
+    val box by packVm.box.collectAsStateWithLifecycle()
+    val packs by box.packs.collectAsStateWithLifecycle()
+    val grandTotal by box.grandTotal.collectAsStateWithLifecycle()
+
+    val activePack = packs.lastOrNull()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text(
-            text = "Pack — ${session.entries.size} card" + if (session.entries.size == 1) "" else "s",
-            style = MaterialTheme.typography.titleMedium,
+        BoxHeader(
+            packCount = packs.size,
+            grandTotal = grandTotal,
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
 
-        if (session.entries.isEmpty()) {
+        if (activePack == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     "No cards yet. Scan one!",
@@ -49,9 +56,47 @@ fun PackScreen() {
                 )
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(session.entries) { entry -> EntryRow(entry) }
-            }
+            ActivePackBlock(pack = activePack)
+        }
+    }
+}
+
+@Composable
+private fun BoxHeader(packCount: Int, grandTotal: Double) {
+    Column {
+        Text(
+            "Box — $packCount / ${BoxSession.CAPACITY} packs",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            "Grand total $${"%.2f".format(grandTotal)}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ActivePackBlock(pack: PackSession) {
+    val entries by pack.entries.collectAsStateWithLifecycle()
+    val runningTotal by pack.runningTotal.collectAsStateWithLifecycle()
+
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            "Current pack — ${entries.size} / ${PackSession.CAPACITY}",
+            style = MaterialTheme.typography.titleSmall,
+        )
+        Text(
+            "Pack total $${"%.2f".format(runningTotal)}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(8.dp))
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(entries) { entry -> EntryRow(entry) }
         }
     }
 }
