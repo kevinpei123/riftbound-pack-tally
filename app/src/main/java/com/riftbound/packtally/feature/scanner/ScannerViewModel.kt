@@ -3,15 +3,23 @@ package com.riftbound.packtally.feature.scanner
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.riftbound.packtally.App
 import com.riftbound.packtally.core.carddb.CardDatabase
 import com.riftbound.packtally.core.ocr.CardOcrParser
 import com.riftbound.packtally.core.ocr.OcrService
+import com.riftbound.packtally.core.pricing.PricingRepository
+import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.RiftboundCard
+import com.riftbound.packtally.model.ScannedEntry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.time.Instant
 
 private const val TAG = "ScannerViewModel"
 
@@ -27,11 +35,20 @@ sealed interface ScanResult {
     data class Identified(val card: RiftboundCard, val confidence: Float) : ScanResult
     data class Ambiguous(val candidates: List<RiftboundCard>) : ScanResult
     data class Failed(val reason: String) : ScanResult
+    data class Pricing(val card: RiftboundCard, val variant: Variant) : ScanResult
+    data class PricingFailed(
+        val card: RiftboundCard,
+        val variant: Variant,
+        val reason: String,
+    ) : ScanResult
 }
 
 enum class Variant { STANDARD, FOIL, SIGNATURE }
 
-class ScannerViewModel : ViewModel() {
+class ScannerViewModel(
+    private val pricing: PricingRepository,
+    private val pack: PackViewModel,
+) : ViewModel() {
 
     private val _scanResult = MutableStateFlow<ScanResult>(ScanResult.Idle)
     val scanResult: StateFlow<ScanResult> = _scanResult.asStateFlow()
@@ -45,9 +62,40 @@ class ScannerViewModel : ViewModel() {
     }
 
     fun recordCard(card: RiftboundCard, variant: Variant) {
-        Log.d(TAG, "Record ${card.id} (${card.name}) as $variant")
-        // TODO: persist to collection via core/persistence once wired.
-        reset()
+        _scanResult.value = ScanResult.Pricing(card, variant)
+        viewModelScope.launch {
+            pricing.price(
+                card = card,
+                foil = variant == Variant.FOIL,
+                signature = variant == Variant.SIGNATURE,
+            )
+                .onSuccess { price ->
+                    pack.append(
+                        ScannedEntry(
+                            card = card,
+                            variant = variant,
+                            price = price,
+                            scannedAt = Instant.now(),
+                        ),
+                    )
+                    reset()
+                }
+                .onFailure { exc ->
+                    Log.e(TAG, "Pricing failed for ${card.id} as $variant", exc)
+                    _scanResult.value = ScanResult.PricingFailed(
+                        card = card,
+                        variant = variant,
+                        reason = exc.message ?: "Pricing failed",
+                    )
+                }
+        }
+    }
+
+    fun retryPricing() {
+        val current = _scanResult.value
+        if (current is ScanResult.PricingFailed) {
+            recordCard(current.card, current.variant)
+        }
     }
 
     fun pickCandidate(card: RiftboundCard) {
@@ -87,6 +135,12 @@ class ScannerViewModel : ViewModel() {
         } catch (e: Throwable) {
             Log.e(TAG, "Identify failed", e)
             ScanResult.Failed(e.message ?: "Recognition error")
+        }
+    }
+
+    companion object {
+        fun factory(app: App, pack: PackViewModel): ViewModelProvider.Factory = viewModelFactory {
+            initializer { ScannerViewModel(pricing = app.pricing, pack = pack) }
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.riftbound.packtally.feature.scanner
 
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,7 +8,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -16,45 +20,63 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.riftbound.packtally.App
+import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.RiftboundCard
 
 private const val RESCAN_THRESHOLD = 0.7f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScannerScreen(
-    viewModel: ScannerViewModel = viewModel(),
-) {
-    val result by viewModel.scanResult.collectAsStateWithLifecycle()
+fun ScannerScreen() {
+    val activity = LocalContext.current as ComponentActivity
+    val app = activity.application as App
 
-    CameraScreen(onCardCaptured = viewModel::onCardCaptured)
+    val packVm: PackViewModel = viewModel(viewModelStoreOwner = activity)
+    val factory = remember(app, packVm) { ScannerViewModel.factory(app, packVm) }
+    val scannerVm: ScannerViewModel = viewModel(factory = factory)
 
-    val showSheet = result is ScanResult.Identified ||
-        result is ScanResult.Ambiguous ||
-        result is ScanResult.Failed
+    val result by scannerVm.scanResult.collectAsStateWithLifecycle()
+
+    CameraScreen(onCardCaptured = scannerVm::onCardCaptured)
+
+    val showSheet = result !is ScanResult.Idle && result !is ScanResult.Scanning
 
     if (showSheet) {
-        ModalBottomSheet(onDismissRequest = viewModel::reset) {
+        ModalBottomSheet(onDismissRequest = scannerVm::reset) {
             when (val r = result) {
                 is ScanResult.Identified -> IdentifiedContent(
                     card = r.card,
                     showRescan = r.confidence < RESCAN_THRESHOLD,
-                    onVariantSelected = { variant -> viewModel.recordCard(r.card, variant) },
-                    onRescan = viewModel::reset,
+                    onVariantSelected = { variant -> scannerVm.recordCard(r.card, variant) },
+                    onRescan = scannerVm::reset,
                 )
                 is ScanResult.Ambiguous -> AmbiguousContent(
                     candidates = r.candidates,
-                    onPickCandidate = viewModel::pickCandidate,
-                    onRescan = viewModel::reset,
+                    onPickCandidate = scannerVm::pickCandidate,
+                    onRescan = scannerVm::reset,
                 )
                 is ScanResult.Failed -> FailedContent(
                     reason = r.reason,
-                    onRescan = viewModel::reset,
+                    onRescan = scannerVm::reset,
+                )
+                is ScanResult.Pricing -> PricingContent(
+                    card = r.card,
+                    variant = r.variant,
+                )
+                is ScanResult.PricingFailed -> PricingFailedContent(
+                    card = r.card,
+                    variant = r.variant,
+                    reason = r.reason,
+                    onRetry = scannerVm::retryPricing,
+                    onSkip = scannerVm::reset,
                 )
                 else -> Unit
             }
@@ -172,6 +194,77 @@ private fun FailedContent(
         Spacer(Modifier.height(24.dp))
         Button(onClick = onRescan, modifier = Modifier.fillMaxWidth()) {
             Text("Re-scan")
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun PricingContent(card: RiftboundCard, variant: Variant) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+    ) {
+        Text(card.name, style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "${card.setCode}-${card.collectorNumber}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(24.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "Fetching ${variant.name.lowercase()} price…",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun PricingFailedContent(
+    card: RiftboundCard,
+    variant: Variant,
+    reason: String,
+    onRetry: () -> Unit,
+    onSkip: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+    ) {
+        Text(
+            "Couldn't fetch ${variant.name.lowercase()} price",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "${card.name} • ${card.setCode}-${card.collectorNumber}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        Spacer(Modifier.height(24.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(onClick = onSkip, modifier = Modifier.weight(1f)) { Text("Skip") }
+            Button(onClick = onRetry, modifier = Modifier.weight(1f)) { Text("Retry") }
         }
         Spacer(Modifier.height(16.dp))
     }
