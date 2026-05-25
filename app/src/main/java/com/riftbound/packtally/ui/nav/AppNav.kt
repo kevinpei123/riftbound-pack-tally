@@ -9,6 +9,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -33,15 +34,7 @@ fun AppNav() {
                         ?.any { it.route == dest.route } == true
                     NavigationBarItem(
                         selected = selected,
-                        onClick = {
-                            navController.navigate(dest.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
+                        onClick = { navController.navigateToTab(dest.route) },
                         icon = { Icon(dest.icon, contentDescription = dest.label) },
                         label = { Text(dest.label) },
                     )
@@ -55,9 +48,21 @@ fun AppNav() {
             modifier = Modifier.padding(innerPadding),
         ) {
             composable(Destination.Scanner.route) { ScannerScreen() }
-            composable(Destination.Pack.route) { PackScreen() }
+            composable(Destination.Pack.route) {
+                PackScreen(
+                    onNavigateToScanner = { navController.navigateToTab(Destination.Scanner.route) },
+                )
+            }
             composable(Destination.Collection.route) { CollectionScreen() }
             composable(Destination.Settings.route) { SettingsScreen() }
         }
+    }
+}
+
+private fun NavController.navigateToTab(route: String) {
+    navigate(route) {
+        popUpTo(graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
     }
 }

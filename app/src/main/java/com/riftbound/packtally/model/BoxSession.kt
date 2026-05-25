@@ -7,20 +7,23 @@ import java.time.Instant
 import java.util.UUID
 
 /**
- * A Riftbound booster box — up to [CAPACITY] sequential [PackSession]s plus a
- * reactive [grandTotal] summed across every pack.
+ * A Riftbound booster box (default mode = [Mode.BOX], 24 packs) or a single-pack
+ * session ([Mode.SINGLE_PACK], capacity 1).
  *
  * Owns pack creation: [appendToActivePack] auto-rolls into a new pack when the
- * current one fills, and refuses (returns false) once the box itself is full.
- * That way the scan UI never has to think about pack boundaries.
+ * current one fills (up to [capacity]). [startNextPack] is the explicit version
+ * driven by the "Complete pack →" UI button. Both honor the mode-derived
+ * capacity.
  *
- * Like [PackSession], this is a stateful class rather than a `data class` —
- * it holds [StateFlow]s and lives in memory only (persistence TBD).
+ * In-memory only; persistence TBD.
  */
 class BoxSession(
     val id: String = UUID.randomUUID().toString(),
     val startedAt: Instant = Instant.now(),
+    val mode: Mode = Mode.BOX,
 ) {
+
+    enum class Mode { SINGLE_PACK, BOX }
 
     private val _packs = MutableStateFlow<List<PackSession>>(emptyList())
     val packs: StateFlow<List<PackSession>> = _packs.asStateFlow()
@@ -28,17 +31,22 @@ class BoxSession(
     private val _grandTotal = MutableStateFlow(0.0)
     val grandTotal: StateFlow<Double> = _grandTotal.asStateFlow()
 
+    /** Maximum number of [PackSession]s allowed in this session, per [mode]. */
+    val capacity: Int
+        get() = when (mode) {
+            Mode.SINGLE_PACK -> 1
+            Mode.BOX -> BOX_CAPACITY
+        }
+
     val packCount: Int get() = _packs.value.size
+
     val isFull: Boolean
         get() {
             val current = _packs.value
-            return current.size >= CAPACITY && current.last().isFull
+            return current.size >= capacity && current.last().isFull
         }
 
-    /**
-     * Append an entry to the currently open pack, starting a new one if needed.
-     * Returns false when the box has no remaining capacity.
-     */
+    /** Append entry to the active pack, auto-creating a new pack if needed. */
     fun appendToActivePack(entry: ScannedEntry): Boolean {
         val pack = currentOpenPackOrStart() ?: return false
         if (!pack.addEntry(entry)) return false
@@ -46,11 +54,23 @@ class BoxSession(
         return true
     }
 
+    /**
+     * Explicitly start the next pack. Returns false if the current pack isn't
+     * full yet, or the box has reached [capacity].
+     */
+    fun startNextPack(): Boolean {
+        val current = _packs.value.lastOrNull()
+        if (current?.isFull != true) return false
+        if (_packs.value.size >= capacity) return false
+        _packs.value = _packs.value + PackSession()
+        return true
+    }
+
     private fun currentOpenPackOrStart(): PackSession? {
         val current = _packs.value.lastOrNull()
         return when {
             current != null && !current.isFull -> current
-            _packs.value.size < CAPACITY -> {
+            _packs.value.size < capacity -> {
                 val newPack = PackSession()
                 _packs.value = _packs.value + newPack
                 newPack
@@ -64,6 +84,6 @@ class BoxSession(
     }
 
     companion object {
-        const val CAPACITY = 24
+        const val BOX_CAPACITY = 24
     }
 }
