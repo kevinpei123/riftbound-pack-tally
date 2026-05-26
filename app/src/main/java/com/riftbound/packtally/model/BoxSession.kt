@@ -21,14 +21,17 @@ class BoxSession(
     val id: String = UUID.randomUUID().toString(),
     val startedAt: Instant = Instant.now(),
     val mode: Mode = Mode.BOX,
+    initialPacks: List<PackSession> = emptyList(),
 ) {
 
     enum class Mode { SINGLE_PACK, BOX }
 
-    private val _packs = MutableStateFlow<List<PackSession>>(emptyList())
+    private val _packs = MutableStateFlow(initialPacks)
     val packs: StateFlow<List<PackSession>> = _packs.asStateFlow()
 
-    private val _grandTotal = MutableStateFlow(0.0)
+    private val _grandTotal = MutableStateFlow(
+        initialPacks.sumOf { it.runningTotal.value },
+    )
     val grandTotal: StateFlow<Double> = _grandTotal.asStateFlow()
 
     /** Maximum number of [PackSession]s allowed in this session, per [mode]. */

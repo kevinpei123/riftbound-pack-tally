@@ -43,6 +43,7 @@ sealed interface ScanResult {
     ) : ScanResult
 }
 
+@kotlinx.serialization.Serializable
 enum class Variant { STANDARD, FOIL, SIGNATURE }
 
 class ScannerViewModel(

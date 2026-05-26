@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.riftbound.packtally.App
+import com.riftbound.packtally.core.persistence.SessionRepository
 import com.riftbound.packtally.core.pricing.PricingRepository
 import com.riftbound.packtally.feature.scanner.Variant
 import com.riftbound.packtally.model.BoxSession
@@ -17,7 +18,6 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "PackViewModel"
 
-/** Confidence stamped onto entries created via manual correction. */
 private const val CONFIDENCE_MANUAL = 1.0f
 
 sealed interface CorrectionState {
@@ -30,6 +30,7 @@ sealed interface CorrectionState {
 class PackViewModel(application: Application) : AndroidViewModel(application) {
 
     private val pricing: PricingRepository = (application as App).pricing
+    private val sessionRepository: SessionRepository = (application as App).sessionRepository
 
     private val _box = MutableStateFlow(BoxSession())
     val box: StateFlow<BoxSession> = _box.asStateFlow()
@@ -37,8 +38,21 @@ class PackViewModel(application: Application) : AndroidViewModel(application) {
     private val _correction = MutableStateFlow<CorrectionState?>(null)
     val correction: StateFlow<CorrectionState?> = _correction.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            // Restore the most recent unfinished session, if any.
+            val restored = runCatching { sessionRepository.loadMostRecentBox() }
+                .onFailure { Log.e(TAG, "Restore failed", it) }
+                .getOrNull()
+            if (restored != null && !restored.isFull) {
+                _box.value = restored
+            }
+        }
+    }
+
     fun append(entry: ScannedEntry) {
         _box.value.appendToActivePack(entry)
+        persist()
     }
 
     fun completePack() {
@@ -46,11 +60,13 @@ class PackViewModel(application: Application) : AndroidViewModel(application) {
         if (!current.startNextPack()) {
             _box.value = BoxSession(mode = current.mode)
         }
+        persist()
     }
 
     fun startNewSession(mode: BoxSession.Mode = _box.value.mode) {
         _box.value = BoxSession(mode = mode)
         _correction.value = null
+        persist()
     }
 
     fun beginCorrection(entry: ScannedEntry) {
@@ -64,6 +80,7 @@ class PackViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteEntry(entry: ScannedEntry) {
         _box.value.removeEntry(entry.id)
         _correction.value = null
+        persist()
     }
 
     /**
@@ -93,11 +110,20 @@ class PackViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     _box.value.replaceEntry(oldEntry.id, newEntry)
                     _correction.value = null
+                    persist()
                 }
                 .onFailure { exc ->
                     Log.e(TAG, "Replacement pricing failed for ${newCard.id} as $newVariant", exc)
                     _correction.value = CorrectionState.Editing(oldEntry)
                 }
+        }
+    }
+
+    private fun persist() {
+        val snapshot = _box.value
+        viewModelScope.launch {
+            runCatching { sessionRepository.save(snapshot) }
+                .onFailure { Log.e(TAG, "Persist failed for box ${snapshot.id}", it) }
         }
     }
 }

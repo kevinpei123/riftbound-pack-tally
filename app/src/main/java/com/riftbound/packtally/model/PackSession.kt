@@ -20,12 +20,15 @@ import java.util.UUID
 class PackSession(
     val id: String = UUID.randomUUID().toString(),
     val startedAt: Instant = Instant.now(),
+    initialEntries: List<ScannedEntry> = emptyList(),
 ) {
 
-    private val _entries = MutableStateFlow<List<ScannedEntry>>(emptyList())
+    private val _entries = MutableStateFlow(initialEntries)
     val entries: StateFlow<List<ScannedEntry>> = _entries.asStateFlow()
 
-    private val _runningTotal = MutableStateFlow(0.0)
+    private val _runningTotal = MutableStateFlow(
+        initialEntries.sumOf { it.price.marketPrice },
+    )
     val runningTotal: StateFlow<Double> = _runningTotal.asStateFlow()
 
     val size: Int get() = _entries.value.size
