@@ -75,6 +75,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { settingsRepository.setCacheTtlHours(hours) }
     }
 
+    fun setForceOcrPreprocessing(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setForceOcrPreprocessing(value) }
+    }
+
     fun clearCache() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { cachedPricing.clearCache() }

@@ -20,6 +20,7 @@ data class AppSettings(
     val currency: Currency = Currency.AUD,
     val usdToTargetRate: Double = 1.55,
     val cacheTtlHours: Int = 6,
+    val forceOcrPreprocessing: Boolean = false,
 )
 
 interface SettingsRepository {
@@ -32,6 +33,7 @@ interface SettingsRepository {
     suspend fun setCurrency(currency: Currency)
     suspend fun setConversionRate(rate: Double)
     suspend fun setCacheTtlHours(hours: Int)
+    suspend fun setForceOcrPreprocessing(value: Boolean)
 
     /** Wipe every preference back to defaults. Part of the nuclear reset path. */
     suspend fun resetAll()

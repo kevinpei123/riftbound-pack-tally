@@ -2,6 +2,7 @@ package com.riftbound.packtally.core.settings
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -22,6 +23,7 @@ class DataStoreSettingsRepository(
                 ?: Currency.AUD,
             usdToTargetRate = prefs[Keys.ConversionRate] ?: 1.55,
             cacheTtlHours = prefs[Keys.CacheTtlHours] ?: 6,
+            forceOcrPreprocessing = prefs[Keys.ForcePreprocessing] ?: false,
         )
     }
 
@@ -48,6 +50,10 @@ class DataStoreSettingsRepository(
         dataStore.edit { it[Keys.CacheTtlHours] = hours }
     }
 
+    override suspend fun setForceOcrPreprocessing(value: Boolean) {
+        dataStore.edit { it[Keys.ForcePreprocessing] = value }
+    }
+
     override suspend fun resetAll() {
         dataStore.edit { it.clear() }
     }
@@ -57,5 +63,6 @@ class DataStoreSettingsRepository(
         val Currency = stringPreferencesKey("currency")
         val ConversionRate = doublePreferencesKey("conversion_rate")
         val CacheTtlHours = intPreferencesKey("cache_ttl_hours")
+        val ForcePreprocessing = booleanPreferencesKey("force_ocr_preprocessing")
     }
 }

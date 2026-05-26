@@ -12,6 +12,7 @@ import com.riftbound.packtally.core.carddb.CardDatabase
 import com.riftbound.packtally.core.ocr.CardOcrParser
 import com.riftbound.packtally.core.ocr.OcrService
 import com.riftbound.packtally.core.pricing.PricingRepository
+import com.riftbound.packtally.core.settings.SettingsRepository
 import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.ScannedEntry
@@ -49,6 +50,7 @@ enum class Variant { STANDARD, FOIL, SIGNATURE }
 class ScannerViewModel(
     private val pricing: PricingRepository,
     private val pack: PackViewModel,
+    private val settings: SettingsRepository,
 ) : ViewModel() {
 
     private val _scanResult = MutableStateFlow<ScanResult>(ScanResult.Idle)
@@ -112,7 +114,8 @@ class ScannerViewModel(
 
     private suspend fun identify(bitmap: Bitmap): ScanResult {
         return try {
-            val blocks = OcrService.recognize(bitmap)
+            val alwaysPreprocess = settings.getCurrentSettings().forceOcrPreprocessing
+            val blocks = OcrService.recognize(bitmap, alwaysPreprocess = alwaysPreprocess)
             val parsed = CardOcrParser.parse(blocks)
 
             parsed.collectorNumber?.let { number ->
@@ -144,7 +147,13 @@ class ScannerViewModel(
 
     companion object {
         fun factory(app: App, pack: PackViewModel): ViewModelProvider.Factory = viewModelFactory {
-            initializer { ScannerViewModel(pricing = app.pricing, pack = pack) }
+            initializer {
+                ScannerViewModel(
+                    pricing = app.pricing,
+                    pack = pack,
+                    settings = app.settingsRepository,
+                )
+            }
         }
     }
 }
