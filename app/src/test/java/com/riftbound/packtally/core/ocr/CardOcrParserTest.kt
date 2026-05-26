@@ -114,7 +114,7 @@ class CardOcrParserTest {
         assertNull(result.name)
     }
 
-    // ---- Phase 5 additions — 10+ more cases to clear the ≥20 floor ----
+    // Additional coverage: OCR edge cases across casing, noise, and confidence.
 
     @Test
     fun `lowercase set code matches via regex case-insensitivity`() {

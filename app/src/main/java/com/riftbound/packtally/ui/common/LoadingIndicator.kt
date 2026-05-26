@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Canonical loading state for the app. Use this anywhere data is being fetched
- * instead of rolling a one-off `CircularProgressIndicator`. Phase 7 deliverable.
+ * instead of rolling a one-off `CircularProgressIndicator`.
  */
 @Composable
 fun LoadingIndicator(

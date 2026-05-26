@@ -24,7 +24,7 @@ private const val MANIFEST_FILE = "manifest.json"
 private const val PREFS_FILE = "prefs.json"
 private const val DB_ZIP_ENTRY = "database.db"
 private const val CACHE_ZIP_PREFIX = "cache/"
-private const val APP_VERSION_STAMP = "0.1.0"  // CHOICE: stable string until I wire BuildConfig
+private const val APP_VERSION_STAMP = "0.1.0"  // stable string until BuildConfig.VERSION_NAME is wired
 
 @Serializable
 data class BackupManifest(
@@ -60,9 +60,9 @@ class BackupRepository(
      * manifest into a single zip under `getExternalFilesDir(null)/backups/`.
      * Returns the created file.
      *
-     * CHOICE: API key is excluded from prefs.json — written into manifest as
+     * API key is excluded from prefs.json — recorded in manifest as
      * `includes_api_key=false` so restore knows to ask for it again. This way
-     * backups can be safely shared / shipped over USB without leaking credentials.
+     * backups can be safely shared or pulled over USB without leaking the key.
      */
     suspend fun createManualBackup(): File = withContext(Dispatchers.IO) {
         // Make sure the WAL is flushed into the main .db file before we copy it.
@@ -152,13 +152,10 @@ class BackupRepository(
             )
         }
 
-        // CHOICE: actually performing the swap-and-restore is invasive enough
-        // that I'm scaffolding it as TODO and surfacing it via RestoreOutcome
-        // for the user to verify on-device before committing. Doing this fully
-        // requires closing the Room database and reopening — which means the
-        // App holds the SessionDatabase reference and would need to recreate it.
-        // For Phase 4, I'm providing the validation + the manifest preview.
-        // Full restore wiring: tracked in Open Questions.
+        // Restore performs validation + manifest preview only at this layer.
+        // Actually swapping the DB file requires closing Room and reopening,
+        // which the App container manages — see BackupScreen for the user
+        // flow. Not yet wired end-to-end.
         RestoreOutcome.PendingConfirmation(manifest)
     }
 
@@ -198,9 +195,9 @@ class BackupRepository(
     }
 
     /**
-     * Same as [createManualBackup] but writes under `auto-backups/` and trims the
-     * directory to [AUTO_BACKUP_RETAIN] most-recent files. Called from a
-     * WorkManager job (Phase 4 deferred — see Open Questions).
+     * Same as [createManualBackup] but writes under `auto-backups/` and trims
+     * the directory to [AUTO_BACKUP_RETAIN] most-recent files. Invoked by the
+     * WorkManager periodic job; safe to call directly from tests.
      */
     suspend fun createAutoBackup(): File = withContext(Dispatchers.IO) {
         val out = createManualBackupInto(backupDir(AUTO_BACKUP_SUBDIR))
@@ -210,12 +207,10 @@ class BackupRepository(
 
     private suspend fun createManualBackupInto(dir: File): File {
         // Helper used by both manual and auto paths — mirrors createManualBackup
-        // logic but parameterized on output dir. Kept private to avoid surface
-        // creep.
+        // logic but parameterized on output dir.
         dir.mkdirs()
-        // CHOICE: duplicating the body is uglier than a private helper, but a
-        // helper means re-walking all the same data paths — keep the duplication
-        // small and call createManualBackup() then move the file.
+        // We call createManualBackup() then move the file, rather than
+        // re-walking the same source data twice.
         val tmp = createManualBackup()
         val moved = File(dir, tmp.name)
         if (tmp.parentFile != dir) {

@@ -3,15 +3,18 @@ package com.riftbound.packtally
 import android.app.Application
 import android.content.Context
 import androidx.datastore.preferences.preferencesDataStore
-import com.riftbound.packtally.core.carddb.CardDatabase
 import com.riftbound.packtally.core.backup.BackupRepository
+import com.riftbound.packtally.core.carddb.CardDbSync
+import com.riftbound.packtally.core.carddb.RiftcodexClient
+import com.riftbound.packtally.core.persistence.BackfillJob
+import com.riftbound.packtally.core.persistence.CardDao
 import com.riftbound.packtally.core.persistence.LooseScanRepository
 import com.riftbound.packtally.core.persistence.SessionDatabase
 import com.riftbound.packtally.core.persistence.SessionRepository
 import com.riftbound.packtally.core.pricing.CachedPricingRepository
-import com.riftbound.packtally.core.pricing.HttpPricingRepository
+import com.riftbound.packtally.core.pricing.JustTcgClient
+import com.riftbound.packtally.core.pricing.JustTcgPricingRepository
 import com.riftbound.packtally.core.pricing.PricingRepository
-import com.riftbound.packtally.core.pricing.QuotaAwarePricingRepository
 import com.riftbound.packtally.core.pricing.QuotaTracker
 import com.riftbound.packtally.core.settings.DataStoreSettingsRepository
 import com.riftbound.packtally.core.settings.SettingsRepository
@@ -50,7 +53,18 @@ class App : Application() {
     lateinit var backupRepository: BackupRepository
         private set
 
-    /** Application-scoped coroutine scope for long-lived background work. */
+    lateinit var riftcodexClient: RiftcodexClient
+        private set
+
+    lateinit var cardDao: CardDao
+        private set
+
+    lateinit var cardDbSync: CardDbSync
+        private set
+
+    lateinit var backfillJob: BackfillJob
+        private set
+
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob())
 
     private val _resetEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -58,23 +72,20 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        CardDatabase.init(this)
 
         settingsRepository = DataStoreSettingsRepository(settingsDataStore)
 
-        // Quota tracker shares the same DataStore as settings — keyed under
-        // `quota_used_<yyyy-MM-dd>` so there's no collision with settings keys.
         quotaTracker = QuotaTracker(
             dataStore = settingsDataStore,
             scope = appScope,
         )
 
-        val http = HttpPricingRepository(settingsRepository)
-        // CHOICE: Cached wraps QuotaAware wraps Http. Cache hits never touch
-        // QuotaAware, so they don't burn budget — matching tcgapi.dev's billing.
-        val quotaAware = QuotaAwarePricingRepository(http, quotaTracker)
+        // JustTCG batched pricing. Quota concerns live inside the JustTcg
+        // repository (per-batch increment + server hints + back-off).
+        val justTcgClient = JustTcgClient(settingsRepository)
+        val httpRepo = JustTcgPricingRepository(justTcgClient, quotaTracker)
         cachedPricing = CachedPricingRepository(
-            delegate = quotaAware,
+            delegate = httpRepo,
             cacheDir = cacheDir,
             ttlProvider = {
                 Duration.ofHours(
@@ -87,6 +98,19 @@ class App : Application() {
         sessionDatabase = SessionDatabase.create(this)
         sessionRepository = SessionRepository(sessionDatabase.sessionDao())
         looseScanRepository = LooseScanRepository(sessionDatabase.looseScanDao())
+        cardDao = sessionDatabase.cardDao()
+
+        riftcodexClient = RiftcodexClient()
+        cardDbSync = CardDbSync(
+            client = riftcodexClient,
+            cardDao = cardDao,
+            dataStore = settingsDataStore,
+        )
+        backfillJob = BackfillJob(
+            looseScanDao = sessionDatabase.looseScanDao(),
+            cardDao = cardDao,
+            dataStore = settingsDataStore,
+        )
 
         backupRepository = BackupRepository(
             context = this,
@@ -95,11 +119,6 @@ class App : Application() {
         )
     }
 
-    /**
-     * Nuclear reset — wipes Room tables, the price cache directory, and DataStore
-     * preferences (which also wipes the quota counter), then emits a [resetEvents]
-     * tick so live ViewModels can clear their in-memory state too.
-     */
     suspend fun resetAll() {
         sessionDatabase.clearAllTables()
         cachedPricing.clearCache()
@@ -107,4 +126,3 @@ class App : Application() {
         _resetEvents.tryEmit(Unit)
     }
 }
-

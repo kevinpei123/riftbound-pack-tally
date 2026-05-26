@@ -1,0 +1,3 @@
+
+# Riftcodex sync writes to Room, not assets. Don't commit any local card snapshots.
+app/src/main/assets/cards.json

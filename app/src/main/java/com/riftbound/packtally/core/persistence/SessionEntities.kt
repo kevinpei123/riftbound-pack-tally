@@ -33,9 +33,9 @@ data class PackSessionEntity(
 )
 
 /**
- * One scan recorded outside any pack/box session — used by Quick Scan (Phase 3)
- * for cards a friend hands you, single-card valuations, etc. Stored separately
- * from pack/box entries because they aggregate independently in Collection.
+ * One scan recorded outside any pack/box session — used by Quick Scan for cards
+ * a friend hands you, single-card valuations, etc. Stored separately from
+ * pack/box entries because they aggregate independently in Collection.
  */
 @Entity(tableName = "loose_scans")
 data class LooseScanEntity(
@@ -45,4 +45,9 @@ data class LooseScanEntity(
     val priceJson: String,
     val scannedAt: Long,
     val notes: String? = null,
+    /**
+     * JustTCG join key. Nullable for rows brought forward from v2 of the schema;
+     * [BackfillJob] populates them at app start where possible.
+     */
+    val tcgplayerId: String? = null,
 )

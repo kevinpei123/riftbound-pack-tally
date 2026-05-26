@@ -14,6 +14,11 @@ layers, with manual DI through `App.kt` (no Hilt):
 the quota tracker exactly once, and exposes them via `lateinit var`. ViewModels
 either pull from `App` directly (AndroidViewModel) or via a constructor factory.
 
+Card data comes from **Riftcodex** (pulled into Room at first launch). Pricing
+comes from **JustTCG** (`POST /v1/cards`, batched ≤20). The `tcgplayer_id`
+field on each Riftcodex card is the join key into JustTCG — see
+`docs/API_NOTES.md` for the full story.
+
 ## Data flow for a single scan (the canonical path)
 
 ```
@@ -55,7 +60,7 @@ either pull from `App` directly (AndroidViewModel) or via a constructor factory.
        │  - else delegate, increment on success
        ▼
 [HttpPricingRepository.price]
-       │  Retrofit → tcgapi.dev /v1/search?q=…&printing=…
+       │  Retrofit → JustTCG /v1/search?q=…&printing=…
        │  X-API-Key header from settingsRepository
        ▼ Result<CardPrice>
 [QuotaTracker.recordNetworkCall]
@@ -109,7 +114,7 @@ either pull from `App` directly (AndroidViewModel) or via a constructor factory.
    │ Card    │   │ OcrSvc   │   │ Cached →    │  │ Room     │   │ DataStore│
    │ Rarity  │   │ Parser   │   │ QuotaAware →│  │ Sess/Loose│   │         │
    │ Entry   │   │          │   │ Http →      │  │ DAOs     │   │         │
-   │ Pack/Box│   │          │   │ tcgapi.dev  │  │          │   │         │
+   │ Pack/Box│   │          │   │ JustTCG  │  │          │   │         │
    └─────────┘   └──────────┘   └─────────────┘  └──────────┘   └─────────┘
                                        │
                                        ▼
@@ -135,7 +140,10 @@ Two domain classes hold reactive state and so are regular classes:
 
 ## Persistence
 
-- **Room (`session.db`)** — schema v2 (Phase 3 added `loose_scans`). Migration v1→v2 preserves existing pack/box data. `fallbackToDestructiveMigration` is the safety net.
+- **Room (`session.db`)** — current schema v3. Real migrations on every bump
+  (no destructive fallback). v2 added `loose_scans` for Quick Scan; v3 added
+  the `cards` table for Riftcodex-sourced data plus a nullable
+  `loose_scans.tcgplayerId` (backfilled by [BackfillJob] on first launch).
 - **DataStore Preferences (`settings.preferences_pb`)** — settings + quota counter (date-scoped key) + (later) backup state.
 - **Disk file cache (`cacheDir/prices/`)** — one JSON per `(cardId, foil, signature)`, written by `CachedPricingRepository`. TTL configurable 1–48h.
 
@@ -151,6 +159,3 @@ User taps Settings → "Reset all data":
 6. `PackViewModel` and `CollectionViewModel` observe → reset in-memory state
 7. User remains in Settings; Pack tab now shows empty session; Collection now shows the empty state.
 
-## Where the choices live
-
-Search `// CHOICE:` to find every spot where I deviated from a strictly-spec'd option in favor of a pragmatic call. Phase 1 added a couple; Phases 2–6 added more.

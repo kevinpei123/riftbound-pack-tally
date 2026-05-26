@@ -6,27 +6,37 @@
 
 - First try: **tap the cell in Pack/Box grid** → manual-correction sheet → search by name → Swap.
 - If many cards in a row are misread (especially foil/signature): Settings → toggle **Force OCR preprocessing** on. This applies grayscale + 1.5× contrast before every recognition pass. Otsu binarization still kicks in automatically on the retry path.
-- For one-off "I just want to type the name": Quick Scan tab → after 3 OCR failures the "Type the card name instead →" button appears at the top. (Pack mode doesn't surface this yet — Phase 3 deferred.)
+- For one-off "I just want to type the name": Quick Scan tab → after 3 OCR
+  failures the "Type the card name instead →" button appears at the top.
+  Pack mode doesn't surface a Type-instead button yet — tap any filled cell to
+  open the correction sheet, which has the same search field.
 
-**Symptom:** App crashes on first launch with a serialization error.
+**Symptom:** App stuck on the "Setting up card database" loading screen.
 
-- Likely `app/src/main/assets/cards.json` is missing or malformed.
-- Rebuild it: `pip install requests beautifulsoup4 && python3 scripts/build_cards_json.py`. The script writes to the assets directory; reinstall the APK to pick up the new file.
+- Riftcodex (`https://api.riftcodex.com`) may be down or unreachable.
+- Check `adb logcat -s FirstLaunch CardDbSync` for the actual exception.
+- The FirstLaunchScreen surfaces a Retry button after a failure.
+- If Riftcodex stays down, see `docs/API_NOTES.md` → "Backup source playbook" — RiftScribe stub is ready to wire.
 
 ## Pricing
 
 **Symptom:** "API key rejected" or every price call fails.
 
-- Settings → tcgapi.dev API key field. Re-paste, watch for trailing whitespace. The field saves on every keystroke; tap outside to commit.
-- Check the dashboard at tcgapi.dev that the key is still active (Hobby tier, not expired).
+- Settings → JustTCG API key field. Re-paste, watch for trailing whitespace. The field saves on every keystroke; tap outside to commit.
+- Check the dashboard at [justtcg.com](https://justtcg.com) that the key is still active.
+- Validate the prefix: JustTCG keys start with `tcg_`. Settings shows an inline error if the prefix is wrong.
 
-**Symptom:** "Daily quota hit. Resets in HH:MM."
+**Symptom:** "Quota exhausted" — one of three buckets.
 
-- You've spent 1000/1000 requests today on tcgapi.dev. Cache hits don't count; only network calls do.
-- Options:
-  - Wait until UTC midnight — counter resets automatically.
-  - In Settings → Cache TTL slider, bump higher (default 24h, max 48h). Subsequent scans within the window hit cache, not network.
-  - Settings → flip "Cache-only mode" on for the rest of the session. Network calls return failure; cached entries still load.
+JustTCG free tier has three independent limits. Check which is full in
+Settings → Quota:
+
+- **Monthly (1000/month):** wait until next billing cycle (date shown).
+  Raise Cache TTL toward 24h.
+- **Daily (100/day):** wait until UTC midnight. Same advice.
+- **Per-minute (10/min):** the app auto-throttles at 7/10 with a 6-second
+  back-off. If you're still hitting 10, slow scanning cadence.
+- Settings → "Cache-only mode" stops all network calls for the session.
 
 **Symptom:** Prices wrong for AUD (or other non-USD).
 

@@ -16,10 +16,10 @@ import java.time.Instant
 private const val TAG = "LooseScanRepository"
 
 /**
- * Repository for the loose-scan pool (Quick Scan feature, Phase 3). Cards added
- * here are NOT part of any pack/box session. Conversion in/out of [ScannedEntry]
- * matches the schema CollectionViewModel aggregates over, so loose scans appear
- * in the Collection grouping exactly like pack-derived entries do.
+ * Repository for the loose-scan pool (Quick Scan). Cards added here are NOT
+ * part of any pack/box session. Conversion in/out of [ScannedEntry] matches
+ * the schema CollectionViewModel aggregates over, so loose scans appear in
+ * the Collection grouping exactly like pack-derived entries do.
  */
 class LooseScanRepository(private val dao: LooseScanDao) {
 
@@ -87,7 +87,7 @@ class LooseScanRepository(private val dao: LooseScanDao) {
             card = card,
             variant = parsedVariant,
             price = price,
-            // CHOICE: manual loose scans are user-confirmed — stamp 1.0 confidence
+            // Manual loose scans are user-confirmed — stamp 1.0 confidence
             // so they don't show up as "low confidence" needing review.
             confidence = 1.0f,
             scannedAt = Instant.ofEpochMilli(scannedAt),

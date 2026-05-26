@@ -61,8 +61,8 @@ green.
 
 ## Edge cases
 
-29. **Back button mid-pack** — Pack tab with cards filled → press hardware back. Currently no confirmation dialog (Phase 6 deferred). If accidental, the session is still safely persisted in Room — re-enter Pack tab and your data is there.
-30. **50-card session — no UI jank** — Quick Scan 50 cards in a row. Scrolling Collection should stay smooth. If you see jank, check `adb logcat | grep -i 'choreographer\|skipped frames'`. Heap should stabilize per the Phase 8 perf doc.
+29. **Back button mid-pack** — Pack tab with cards filled → press hardware back. There's no confirmation dialog, but the session is safely persisted in Room — re-enter the Pack tab and your data is still there.
+30. **50-card session — no UI jank** — Quick Scan 50 cards in a row. Scrolling Collection should stay smooth. If you see jank, check `adb logcat | grep -i 'choreographer\|skipped frames'`. Heap should stabilize — see `docs/PERFORMANCE.md`.
 
 ---
 

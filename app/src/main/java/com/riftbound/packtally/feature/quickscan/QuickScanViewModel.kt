@@ -94,7 +94,7 @@ class QuickScanViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun pickCandidate(card: RiftboundCard) {
-        // CHOICE: name-fuzzy picks get 0.5 confidence — same fallback we use in
+        // Name-fuzzy picks get 0.5 confidence — same fallback we use in
         // ScannerViewModel — so the stored entry knows it didn't come from a
         // high-confidence collector-number read.
         _state.value = QuickScanState.Identified(card, 0.5f)
@@ -106,11 +106,7 @@ class QuickScanViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val result = runCatching {
                 withTimeout(PRICING_TIMEOUT_MS) {
-                    pricing.price(
-                        card = card,
-                        foil = variant == Variant.FOIL,
-                        signature = variant == Variant.SIGNATURE,
-                    )
+                    pricing.price(card, variant)
                 }
             }.getOrElse { exc ->
                 Log.e(TAG, "Pricing timed out / threw for ${card.id} $variant", exc)

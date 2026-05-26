@@ -5,12 +5,14 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.riftbound.packtally.App
+import com.riftbound.packtally.core.carddb.CardDbSync
 import com.riftbound.packtally.core.pricing.CachedPricingRepository
 import com.riftbound.packtally.core.pricing.QuotaState
 import com.riftbound.packtally.core.pricing.QuotaTracker
 import com.riftbound.packtally.core.settings.AppSettings
 import com.riftbound.packtally.core.settings.Currency
 import com.riftbound.packtally.core.settings.SettingsRepository
+import kotlinx.coroutines.flow.SharingStarted as SS
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +30,8 @@ private const val TAG = "SettingsViewModel"
 sealed interface SettingsEvent {
     data object CacheCleared : SettingsEvent
     data object ResetComplete : SettingsEvent
+    data class CardDbResynced(val cardCount: Int) : SettingsEvent
+    data class CardDbResyncFailed(val reason: String) : SettingsEvent
 }
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -36,6 +40,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val settingsRepository: SettingsRepository = app.settingsRepository
     private val cachedPricing: CachedPricingRepository = app.cachedPricing
     private val quotaTracker: QuotaTracker = app.quotaTracker
+    private val cardDbSync: CardDbSync = app.cardDbSync
 
     val settings: StateFlow<AppSettings> =
         settingsRepository.settings.stateIn(
@@ -51,11 +56,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _cacheSizeBytes = MutableStateFlow(0L)
     val cacheSizeBytes: StateFlow<Long> = _cacheSizeBytes.asStateFlow()
 
+    val cardDbLastSyncedAt: StateFlow<java.time.Instant?> =
+        cardDbSync.lastSyncedAt.stateIn(viewModelScope, SS.Eagerly, null)
+
+    private val _cardCount = MutableStateFlow(0)
+    val cardCount: StateFlow<Int> = _cardCount.asStateFlow()
+
+    private val _cardDbSyncing = MutableStateFlow(false)
+    val cardDbSyncing: StateFlow<Boolean> = _cardDbSyncing.asStateFlow()
+
     private val _events = MutableSharedFlow<SettingsEvent>()
     val events: SharedFlow<SettingsEvent> = _events.asSharedFlow()
 
     init {
         refreshCacheSize()
+        viewModelScope.launch {
+            runCatching { _cardCount.value = cardDbSync.cardCount() }
+                .onFailure { Log.w(TAG, "Card count read failed", it) }
+        }
     }
 
     fun refreshCacheSize() {
@@ -113,5 +131,23 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun setUseCachedOnly(value: Boolean) {
         quotaTracker.setUseCachedOnly(value)
+    }
+
+    fun resyncCardDatabase() {
+        if (_cardDbSyncing.value) return
+        _cardDbSyncing.value = true
+        viewModelScope.launch {
+            val outcome = runCatching { cardDbSync.runFullSync() }
+            _cardDbSyncing.value = false
+            outcome
+                .onSuccess { count ->
+                    _cardCount.value = count
+                    _events.emit(SettingsEvent.CardDbResynced(count))
+                }
+                .onFailure { exc ->
+                    Log.e(TAG, "Card DB resync failed", exc)
+                    _events.emit(SettingsEvent.CardDbResyncFailed(exc.message ?: "resync failed"))
+                }
+        }
     }
 }

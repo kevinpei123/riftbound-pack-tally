@@ -64,8 +64,8 @@ fun QuickScanScreen() {
 
     var showManualEntry by remember { mutableStateOf(false) }
 
-    // CHOICE: reset session stats whenever the screen leaves composition.
-    // "Session" = "from when I opened Quick Scan to when I navigated away."
+    // Reset session stats whenever the screen leaves composition.
+    // "Session" = from when I opened Quick Scan to when I navigated away.
     LaunchedEffect(Unit) {
         // no-op on enter; the DisposableEffect below handles exit
     }

@@ -120,9 +120,9 @@ fun BackupScreen() {
         )
         Text(
             "WorkManager scaffolding is in place but the periodic job isn't " +
-                "registered yet (Phase 4 deferred). The plan: daily " +
-                "PeriodicWorkRequest, 1h flex window, keep the 7 newest in " +
-                "auto-backups/, skip when battery is critical.",
+                "registered yet. The plan: daily PeriodicWorkRequest, 1h flex " +
+                "window, keep the 7 newest in auto-backups/, skip when battery " +
+                "is critical.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

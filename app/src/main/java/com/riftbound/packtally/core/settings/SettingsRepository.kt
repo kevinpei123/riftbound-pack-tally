@@ -19,9 +19,9 @@ data class AppSettings(
     val apiKey: String? = null,
     val currency: Currency = Currency.AUD,
     val usdToTargetRate: Double = 1.55,
-    // CHOICE: 24h default per Phase 2 — tcgapi.dev refreshes prices once daily,
-    // so a 24-hour cache window matches the upstream cadence without missing data.
-    val cacheTtlHours: Int = 24,
+    // JustTCG refreshes Riftbound pricing every ~4h, so a 6h window matches
+    // their cadence comfortably while reusing cached entries within a session.
+    val cacheTtlHours: Int = 6,
     val forceOcrPreprocessing: Boolean = false,
 )
 

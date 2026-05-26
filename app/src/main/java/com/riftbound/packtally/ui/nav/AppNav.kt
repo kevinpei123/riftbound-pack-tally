@@ -46,20 +46,20 @@ fun AppNav() {
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // CHOICE: confirm dialog state is host-local — tracker emits PromptConfirm on
-    // every successful network call at ≥95%, but UI shows at most one dialog at
-    // a time. Once user picks an action, dialog dismisses; future events re-open
-    // it unless the user picked Cache-only (in which case future network calls
-    // fail without firing the event).
+    // Confirm dialog state is host-local — the tracker emits PromptConfirm on
+    // every successful network call at ≥95%, but the UI shows at most one
+    // dialog at a time. Once the user picks an action the dialog dismisses;
+    // future events re-open it unless the user picked Cache-only.
     var quotaConfirm by remember { mutableStateOf<QuotaEvent.PromptConfirm?>(null) }
 
     LaunchedEffect(app.quotaTracker) {
         app.quotaTracker.events.collect { event ->
             when (event) {
                 is QuotaEvent.NearLimit -> {
+                    val s = event.state
                     snackbarHostState.showSnackbar(
-                        "API quota at ${(event.used * 100 / event.limit)}% " +
-                            "(${event.used}/${event.limit}). Cache will be used where possible.",
+                        "JustTCG quota at ${(s.monthlyPercentUsed * 100).toInt()}% " +
+                            "(${s.monthlyUsed}/${s.monthlyLimit}). Cache will be used where possible.",
                     )
                 }
                 is QuotaEvent.PromptConfirm -> {
@@ -117,11 +117,13 @@ fun AppNav() {
             onDismissRequest = { quotaConfirm = null },
             title = { Text("API quota almost exhausted") },
             text = {
+                val s = confirm.state
                 Text(
-                    "You've used ${confirm.used}/${confirm.limit} tcgapi.dev " +
-                        "requests today. The counter resets at UTC midnight.\n\n" +
-                        "Cache hits don't count, so you can keep scanning cards " +
-                        "already in cache without burning more budget.",
+                    "You've used ${s.monthlyUsed}/${s.monthlyLimit} JustTCG " +
+                        "monthly requests. Counter resets at the start of next " +
+                        "billing cycle.\n\nCache hits don't count, so you can " +
+                        "keep scanning cards already in cache without burning " +
+                        "more budget.",
                 )
             },
             confirmButton = {

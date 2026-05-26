@@ -128,7 +128,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             val completedPacks = boxes.flatMap { it.packs.value }.filter { it.isFull }
             val packEntries = completedPacks.flatMap { it.entries.value }
 
-            // Loose scans (Phase 3) participate in Collection aggregation.
+            // Loose scans participate in Collection aggregation.
             val looseEntries = runCatching { looseScanRepository.getAllForExport() }
                 .onFailure { Log.e(TAG, "Loading loose scans failed", it) }
                 .getOrDefault(emptyList())

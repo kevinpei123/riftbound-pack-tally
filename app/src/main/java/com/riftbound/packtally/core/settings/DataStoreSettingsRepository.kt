@@ -22,7 +22,7 @@ class DataStoreSettingsRepository(
                 ?.let { runCatching { Currency.valueOf(it) }.getOrNull() }
                 ?: Currency.AUD,
             usdToTargetRate = prefs[Keys.ConversionRate] ?: 1.55,
-            cacheTtlHours = prefs[Keys.CacheTtlHours] ?: 24,
+            cacheTtlHours = prefs[Keys.CacheTtlHours] ?: 6,
             forceOcrPreprocessing = prefs[Keys.ForcePreprocessing] ?: false,
         )
     }

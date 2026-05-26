@@ -43,7 +43,6 @@ import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.ScannedEntry
 import kotlinx.coroutines.delay
 
-/** TextField debounce window — see Phase 1 audit. */
 private const val SEARCH_DEBOUNCE_MS = 300L
 
 @OptIn(ExperimentalMaterial3Api::class)

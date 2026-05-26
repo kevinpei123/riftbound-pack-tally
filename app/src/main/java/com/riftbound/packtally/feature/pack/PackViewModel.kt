@@ -105,11 +105,7 @@ class PackViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         _correction.value = CorrectionState.Pricing(oldEntry)
         viewModelScope.launch {
-            pricing.price(
-                card = newCard,
-                foil = newVariant == Variant.FOIL,
-                signature = newVariant == Variant.SIGNATURE,
-            )
+            pricing.price(newCard, newVariant)
                 .onSuccess { price ->
                     val newEntry = oldEntry.copy(
                         card = newCard,

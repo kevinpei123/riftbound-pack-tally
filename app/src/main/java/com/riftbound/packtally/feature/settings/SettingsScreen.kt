@@ -59,6 +59,9 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
     val cacheSize by vm.cacheSizeBytes.collectAsStateWithLifecycle()
     val quota by vm.quota.collectAsStateWithLifecycle()
     val useCachedOnly by vm.useCachedOnly.collectAsStateWithLifecycle()
+    val cardDbLastSyncedAt by vm.cardDbLastSyncedAt.collectAsStateWithLifecycle()
+    val cardCount by vm.cardCount.collectAsStateWithLifecycle()
+    val cardDbSyncing by vm.cardDbSyncing.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showResetDialog by remember { mutableStateOf(false) }
 
@@ -69,6 +72,8 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
             val msg = when (event) {
                 SettingsEvent.CacheCleared -> "Cache cleared"
                 SettingsEvent.ResetComplete -> "All data reset"
+                is SettingsEvent.CardDbResynced -> "Synced ${event.cardCount} cards"
+                is SettingsEvent.CardDbResyncFailed -> "Re-sync failed — ${event.reason}"
             }
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
@@ -92,6 +97,13 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
             settings = settings,
             onCurrencyChange = vm::setCurrency,
             onRateChange = vm::setConversionRate,
+        )
+
+        CardDatabaseSection(
+            cardCount = cardCount,
+            lastSyncedAt = cardDbLastSyncedAt,
+            isSyncing = cardDbSyncing,
+            onResync = vm::resyncCardDatabase,
         )
 
         QuotaCard(
@@ -164,19 +176,26 @@ private fun ApiKeySection(
     var input by remember(currentKey) { mutableStateOf(currentKey) }
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SectionLabel("tcgapi.dev API key")
+        SectionLabel("JustTCG API key")
         OutlinedTextField(
             value = input,
             onValueChange = {
                 input = it
                 onChange(it)
             },
-            placeholder = { Text("tcg_live_...") },
+            placeholder = { Text("tcg_…") },
             singleLine = true,
+            isError = input.isNotBlank() && !input.startsWith("tcg_"),
+            supportingText = {
+                if (input.isNotBlank() && !input.startsWith("tcg_")) {
+                    Text("JustTCG keys start with tcg_")
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "Saved in DataStore as plain text. Personal-use only.",
+            "Get a free key at justtcg.com — 1,000 requests/month, 100/day, no credit card. " +
+                "Saved in DataStore as plain text. Personal-use only.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -239,10 +258,10 @@ private fun CacheTtlSection(
         Slider(
             value = ttlHours.toFloat(),
             onValueChange = { onChange(it.roundToInt()) },
-            // CHOICE: 1..48h range per Phase 2 — Hobby tier benefits from a longer
-            // cache window than the original 1..24 design (default is now 24h).
-            valueRange = 1f..48f,
-            steps = 46,
+            // 1..24h range — JustTCG refreshes ~4h, so anything past 24h
+            // shows stale prices. Default 6h.
+            valueRange = 1f..24f,
+            steps = 22,
         )
         Text(
             "Prices cached longer than this expire and refetch from tcgapi.dev.",
@@ -253,6 +272,59 @@ private fun CacheTtlSection(
 }
 
 @Composable
+private fun CardDatabaseSection(
+    cardCount: Int,
+    lastSyncedAt: Instant?,
+    isSyncing: Boolean,
+    onResync: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("Card database", style = MaterialTheme.typography.titleMedium)
+            val syncedLabel = lastSyncedAt
+                ?.let { "last synced ${formatTimestamp(it)}" }
+                ?: "not yet synced"
+            Text(
+                "$cardCount cards · $syncedLabel",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = onResync,
+                enabled = !isSyncing,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (isSyncing) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.height(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.height(0.dp).padding(start = 8.dp))
+                    Text("Re-syncing…")
+                } else {
+                    Text("Re-sync from Riftcodex")
+                }
+            }
+            Text(
+                "Riftcodex auto-resyncs weekly in the background.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun formatTimestamp(t: Instant): String {
+    val zoned = t.atZone(java.time.ZoneId.systemDefault())
+    return zoned.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+}
+
+@Composable
 private fun QuotaCard(
     quota: QuotaState,
     useCachedOnly: Boolean,
@@ -260,8 +332,8 @@ private fun QuotaCard(
     onResetCounter: () -> Unit,
 ) {
     val tone = when {
-        quota.percentUsed >= 0.95f -> MaterialTheme.colorScheme.errorContainer
-        quota.percentUsed >= 0.80f -> MaterialTheme.colorScheme.tertiaryContainer
+        quota.monthlyPercentUsed >= 0.95f -> MaterialTheme.colorScheme.errorContainer
+        quota.monthlyPercentUsed >= 0.80f -> MaterialTheme.colorScheme.tertiaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
     Card(
@@ -274,20 +346,27 @@ private fun QuotaCard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("tcgapi.dev quota (Hobby tier)", style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = "${quota.used} / ${quota.limit} requests today",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
+            Text("JustTCG quota", style = MaterialTheme.typography.titleMedium)
+            QuotaRow(
+                label = "Monthly",
+                used = quota.monthlyUsed,
+                limit = quota.monthlyLimit,
+                resetsAt = quota.resetsAt,
+                resetLabel = "next billing reset",
             )
-            LinearProgressIndicator(
-                progress = { quota.percentUsed.coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth(),
+            QuotaRow(
+                label = "Today",
+                used = quota.dailyUsed,
+                limit = quota.dailyLimit,
+                resetsAt = quota.dailyResetsAt,
+                resetLabel = "UTC midnight",
             )
-            Text(
-                text = "Resets in ${formatDurationUntil(quota.resetsAt)} (UTC midnight)",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            QuotaRow(
+                label = "This minute",
+                used = quota.minuteUsed,
+                limit = quota.minuteLimit,
+                resetsAt = quota.minuteResetsAt,
+                resetLabel = "next minute",
             )
 
             Row(
@@ -312,6 +391,31 @@ private fun QuotaCard(
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Reset counter (debug)") }
         }
+    }
+}
+
+@Composable
+private fun QuotaRow(
+    label: String,
+    used: Int,
+    limit: Int,
+    resetsAt: Instant,
+    resetLabel: String,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("$label: $used / $limit", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "in ${formatDurationUntil(resetsAt)} ($resetLabel)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        val pct = if (limit == 0) 0f else (used.toFloat() / limit).coerceIn(0f, 1f)
+        LinearProgressIndicator(progress = { pct }, modifier = Modifier.fillMaxWidth())
     }
 }
 

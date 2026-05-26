@@ -76,11 +76,7 @@ class ScannerViewModel(
         viewModelScope.launch {
             val result = runCatching {
                 withTimeout(PRICING_TIMEOUT_MS) {
-                    pricing.price(
-                        card = card,
-                        foil = variant == Variant.FOIL,
-                        signature = variant == Variant.SIGNATURE,
-                    )
+                    pricing.price(card, variant)
                 }
             }.getOrElse { exc ->
                 Log.e(TAG, "Pricing timed out / threw for ${card.id} as $variant", exc)
@@ -132,8 +128,8 @@ class ScannerViewModel(
     private suspend fun identify(bitmap: Bitmap): ScanResult {
         return try {
             val alwaysPreprocess = settings.getCurrentSettings().forceOcrPreprocessing
-            // VERIFIED: phase-6 — OCR call wrapped in withTimeout(10s) so a stuck
-            // ML Kit call can't hang the scan flow indefinitely.
+            // OCR call wrapped in withTimeout(10s) so a stuck ML Kit call
+            // can't hang the scan flow indefinitely.
             val blocks = withTimeout(OCR_TIMEOUT_MS) {
                 OcrService.recognize(bitmap, alwaysPreprocess = alwaysPreprocess)
             }
