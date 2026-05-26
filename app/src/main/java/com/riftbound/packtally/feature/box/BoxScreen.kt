@@ -32,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.BoxSession
 import com.riftbound.packtally.model.PackSession
+import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
 
 @Composable
 fun BoxScreen() {
@@ -101,7 +102,7 @@ private fun BoxHeader(
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            "$${"%.2f".format(grandTotal)}",
+            LocalCurrencyFormatter.current.format(grandTotal),
             style = MaterialTheme.typography.displaySmall,
             fontWeight = FontWeight.Bold,
         )
@@ -148,7 +149,7 @@ private fun PackSubtotalRow(packNumber: Int, pack: PackSession) {
                 )
             }
             Text(
-                "$${"%.2f".format(total)}",
+                LocalCurrencyFormatter.current.format(total),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )

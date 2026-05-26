@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.model.Rarity
+import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -123,7 +124,7 @@ private fun CollectionHeader(
         Text("Collection", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
         Text(
-            "$${"%.2f".format(totalValue)}",
+            LocalCurrencyFormatter.current.format(totalValue),
             style = MaterialTheme.typography.displaySmall,
             fontWeight = FontWeight.Bold,
         )
@@ -213,7 +214,7 @@ private fun SetHeader(setCode: String, totalValue: Double) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "$${"%.2f".format(totalValue)}",
+                LocalCurrencyFormatter.current.format(totalValue),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -251,14 +252,15 @@ private fun EntryRow(entry: CollectionEntry) {
             )
         }
         Column(horizontalAlignment = Alignment.End) {
+            val formatter = LocalCurrencyFormatter.current
             Text(
-                "$${"%.2f".format(entry.totalMarketValue)}",
+                formatter.format(entry.totalMarketValue),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             if (entry.quantity > 1) {
                 Text(
-                    "$${"%.2f".format(entry.unitPrice)} ea",
+                    "${formatter.format(entry.unitPrice)} ea",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

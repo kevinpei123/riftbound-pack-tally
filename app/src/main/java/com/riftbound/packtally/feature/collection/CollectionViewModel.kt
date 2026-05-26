@@ -68,7 +68,8 @@ sealed interface CollectionEvent {
 
 class CollectionViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val sessionRepository: SessionRepository = (application as App).sessionRepository
+    private val app = application as App
+    private val sessionRepository: SessionRepository = app.sessionRepository
 
     private val _allEntries = MutableStateFlow<List<CollectionEntry>>(emptyList())
     private val _filter = MutableStateFlow(CollectionFilter())
@@ -109,6 +110,9 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
 
     init {
         refresh()
+        viewModelScope.launch {
+            app.resetEvents.collect { refresh() }
+        }
     }
 
     fun refresh() {

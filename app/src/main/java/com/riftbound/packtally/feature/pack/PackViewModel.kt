@@ -29,8 +29,9 @@ sealed interface CorrectionState {
 
 class PackViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val pricing: PricingRepository = (application as App).pricing
-    private val sessionRepository: SessionRepository = (application as App).sessionRepository
+    private val app = application as App
+    private val pricing: PricingRepository = app.pricing
+    private val sessionRepository: SessionRepository = app.sessionRepository
 
     private val _box = MutableStateFlow(BoxSession())
     val box: StateFlow<BoxSession> = _box.asStateFlow()
@@ -46,6 +47,14 @@ class PackViewModel(application: Application) : AndroidViewModel(application) {
                 .getOrNull()
             if (restored != null && !restored.isFull) {
                 _box.value = restored
+            }
+        }
+        viewModelScope.launch {
+            // Nuclear reset triggered from Settings — drop the in-memory session
+            // so the next mutation doesn't immediately repopulate Room.
+            app.resetEvents.collect {
+                _box.value = BoxSession()
+                _correction.value = null
             }
         }
     }

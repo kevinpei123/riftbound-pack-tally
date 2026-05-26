@@ -13,11 +13,11 @@ private val DEFAULT_TTL: Duration = Duration.ofHours(6)
  *
  * On each [price] call:
  * 1. Look for `${cacheDir}/prices/${cardId}_${foil}_${signature}.json`.
- * 2. If the file exists and `Instant.now() < lastUpdated + ttl`, return it.
+ * 2. If the file exists and `now() < lastUpdated + ttlProvider()`, return it.
  * 3. Otherwise delegate to [delegate], and on success persist the result.
  *
- * Built to keep tcgapi.dev free-tier usage (100 req/day) far under the cap when
- * the same card is scanned repeatedly within a 6-hour window.
+ * [ttlProvider] is read fresh on every call so SettingsScreen can change the
+ * cache window at runtime without rebuilding the repository.
  *
  * Cache writes are best-effort — IO failures are swallowed so a transient disk
  * problem can't break pricing. Cache reads of corrupt files are treated as a
@@ -26,7 +26,7 @@ private val DEFAULT_TTL: Duration = Duration.ofHours(6)
 class CachedPricingRepository(
     private val delegate: PricingRepository,
     cacheDir: File,
-    private val ttl: Duration = DEFAULT_TTL,
+    private val ttlProvider: suspend () -> Duration = { DEFAULT_TTL },
     private val clock: () -> Instant = { Instant.now() },
 ) : PricingRepository {
 
@@ -42,8 +42,9 @@ class CachedPricingRepository(
         foil: Boolean,
         signature: Boolean,
     ): Result<CardPrice> {
+        val ttl = ttlProvider()
         val file = cacheFileFor(card.id, foil, signature)
-        readFresh(file)?.let { return Result.success(it) }
+        readFresh(file, ttl)?.let { return Result.success(it) }
 
         val fetched = delegate.price(card, foil, signature)
         fetched.onSuccess { write(file, it) }
@@ -68,7 +69,7 @@ class CachedPricingRepository(
         return File(pricesDir, "${safeId}_${foil}_${signature}.json")
     }
 
-    private fun readFresh(file: File): CardPrice? {
+    private fun readFresh(file: File, ttl: Duration): CardPrice? {
         if (!file.isFile) return null
         val price = runCatching { json.decodeFromString<CardPrice>(file.readText()) }
             .getOrNull() ?: return null

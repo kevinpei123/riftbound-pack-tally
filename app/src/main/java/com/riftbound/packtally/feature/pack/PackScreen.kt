@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.model.PackSession
 import com.riftbound.packtally.model.ScannedEntry
+import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -160,14 +161,15 @@ private fun PackHeader(
                     )
                 }
                 Column(horizontalAlignment = Alignment.End) {
+                    val formatter = LocalCurrencyFormatter.current
                     Text(
-                        "$${"%.2f".format(runningTotal)}",
+                        formatter.format(runningTotal),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
                     if (boxCapacity > 1) {
                         Text(
-                            "Box $${"%.2f".format(grandTotal)}",
+                            "Box ${formatter.format(grandTotal)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -214,7 +216,7 @@ private fun FilledCell(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "$${"%.2f".format(entry.price.marketPrice)}",
+                LocalCurrencyFormatter.current.format(entry.price.marketPrice),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )

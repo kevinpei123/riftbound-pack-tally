@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.BoxSession
+import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
 
 @Composable
 fun HomeScreen(onNavigateToScanner: () -> Unit) {
@@ -131,7 +132,7 @@ private fun ActiveSessionCard(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Total so far: $${"%.2f".format(grandTotal)}",
+                "Total so far: ${LocalCurrencyFormatter.current.format(grandTotal)}",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(12.dp))
