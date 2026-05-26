@@ -16,7 +16,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.riftbound.packtally.feature.collection.CollectionScreen
+import com.riftbound.packtally.feature.box.BoxScreen
+import com.riftbound.packtally.feature.home.HomeScreen
 import com.riftbound.packtally.feature.pack.PackScreen
 import com.riftbound.packtally.feature.scanner.ScannerScreen
 import com.riftbound.packtally.feature.settings.SettingsScreen
@@ -44,16 +45,21 @@ fun AppNav() {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Destination.Scanner.route,
+            startDestination = Destination.Home.route,
             modifier = Modifier.padding(innerPadding),
         ) {
+            composable(Destination.Home.route) {
+                HomeScreen(
+                    onNavigateToScanner = { navController.navigateToTab(Destination.Scanner.route) },
+                )
+            }
             composable(Destination.Scanner.route) { ScannerScreen() }
             composable(Destination.Pack.route) {
                 PackScreen(
                     onNavigateToScanner = { navController.navigateToTab(Destination.Scanner.route) },
                 )
             }
-            composable(Destination.Collection.route) { CollectionScreen() }
+            composable(Destination.Box.route) { BoxScreen() }
             composable(Destination.Settings.route) { SettingsScreen() }
         }
     }
