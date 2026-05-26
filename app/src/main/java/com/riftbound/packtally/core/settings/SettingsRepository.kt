@@ -19,7 +19,9 @@ data class AppSettings(
     val apiKey: String? = null,
     val currency: Currency = Currency.AUD,
     val usdToTargetRate: Double = 1.55,
-    val cacheTtlHours: Int = 6,
+    // CHOICE: 24h default per Phase 2 — tcgapi.dev refreshes prices once daily,
+    // so a 24-hour cache window matches the upstream cadence without missing data.
+    val cacheTtlHours: Int = 24,
     val forceOcrPreprocessing: Boolean = false,
 )
 

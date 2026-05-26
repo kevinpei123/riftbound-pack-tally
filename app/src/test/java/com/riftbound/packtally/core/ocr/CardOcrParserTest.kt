@@ -114,6 +114,118 @@ class CardOcrParserTest {
         assertNull(result.name)
     }
 
+    // ---- Phase 5 additions — 10+ more cases to clear the ≥20 floor ----
+
+    @Test
+    fun `lowercase set code matches via regex case-insensitivity`() {
+        val blocks = listOf(
+            block("Glaring Vanguard", top = 40, height = 50),
+            block("ogn-099/298", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("OGN-099/298", result.collectorNumber)
+        assertEquals("OGN", result.setCode)
+    }
+
+    @Test
+    fun `number embedded in noisy text still parses`() {
+        val blocks = listOf(
+            block("Card Name", top = 40, height = 50),
+            block("foo OGN-042 bar", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("OGN-042", result.collectorNumber)
+    }
+
+    @Test
+    fun `garbage input returns nulls only`() {
+        val blocks = listOf(
+            block("!@#\$%", top = 40, height = 50),
+            block("~~~~", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertNull(result.collectorNumber)
+        assertNull(result.setCode)
+        // Name might pick up the top block if length >= 3
+        // "!@#$%" has length 5, height 50 → passes filter → name = it
+        assertEquals("!@#\$%", result.name)
+    }
+
+    @Test
+    fun `multi-line block with number on third line still resolves`() {
+        val blocks = listOf(
+            block("Some Card", top = 40, height = 50),
+            block("body line 1", top = 200, height = 22),
+            block("body line 2", top = 240, height = 22),
+            block("OGN-150/298", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("OGN-150/298", result.collectorNumber)
+    }
+
+    @Test
+    fun `number with extra whitespace inside the dash does NOT match (regex requires no spaces)`() {
+        // Documents existing behavior — the regex is strict on whitespace
+        // around the hyphen. If we ever want fuzzier matching, fix here.
+        val blocks = listOf(
+            block("Card", top = 40, height = 50),
+            block("OGN - 001", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertNull(result.collectorNumber)
+    }
+
+    @Test
+    fun `name with apostrophe survives parsing intact`() {
+        val blocks = listOf(
+            block("Annie, Fiery", top = 40, height = 50),
+            block("OGS-001/24", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("Annie, Fiery", result.name)
+        assertEquals("OGS-001/24", result.collectorNumber)
+    }
+
+    @Test
+    fun `both number and name parsed — number wins as the primary identifier`() {
+        val blocks = listOf(
+            block("Brazen Buccaneer", top = 40, height = 50),
+            block("OGN-002/298", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("OGN-002/298", result.collectorNumber)
+        assertEquals("Brazen Buccaneer", result.name)
+    }
+
+    @Test
+    fun `multiple SET-NUM matches in one block — first parse wins`() {
+        val blocks = listOf(
+            block("Card Name", top = 40, height = 50),
+            block("OGN-001 sees OGN-002 too", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        // The findAll iterates in order; OGN-001 comes first.
+        assertEquals("OGN-001", result.collectorNumber)
+    }
+
+    @Test
+    fun `confidence proxy at length 1 is 005`() {
+        val b = block(text = "x", top = 0, height = 10)
+        kotlin.test.assertEquals(0.05f, b.confidence, 0.0001f)
+    }
+
+    @Test
+    fun `confidence proxy at length 19 is 095 cap`() {
+        val b = block(text = "x".repeat(19), top = 0, height = 10)
+        kotlin.test.assertEquals(0.95f, b.confidence, 0.0001f)
+    }
+
+    @Test
+    fun `confidence proxy at length 50 still capped at 095`() {
+        val b = block(text = "x".repeat(50), top = 0, height = 10)
+        kotlin.test.assertEquals(0.95f, b.confidence, 0.0001f)
+    }
+
     @Test
     fun `name skips small-height set logo and picks the top-most large block`() {
         // Small "OGN" set tag near the top should not be chosen as the name —

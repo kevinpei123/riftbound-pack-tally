@@ -31,3 +31,18 @@ data class PackSessionEntity(
     val startedAt: Long,
     val entriesJson: String,
 )
+
+/**
+ * One scan recorded outside any pack/box session — used by Quick Scan (Phase 3)
+ * for cards a friend hands you, single-card valuations, etc. Stored separately
+ * from pack/box entries because they aggregate independently in Collection.
+ */
+@Entity(tableName = "loose_scans")
+data class LooseScanEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @androidx.room.ColumnInfo(index = true) val cardId: String,
+    val variant: String,
+    val priceJson: String,
+    val scannedAt: Long,
+    val notes: String? = null,
+)

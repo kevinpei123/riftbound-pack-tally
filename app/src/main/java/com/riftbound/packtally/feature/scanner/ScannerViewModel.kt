@@ -16,10 +16,12 @@ import com.riftbound.packtally.core.settings.SettingsRepository
 import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.ScannedEntry
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import java.time.Instant
 
 private const val TAG = "ScannerViewModel"
@@ -27,6 +29,9 @@ private const val TAG = "ScannerViewModel"
 private const val CONFIDENCE_KNOWN_SET = 0.9f
 private const val CONFIDENCE_UNKNOWN_SET = 0.6f
 private const val CONFIDENCE_NAME_FALLBACK = 0.5f
+
+private const val OCR_TIMEOUT_MS = 10_000L
+private const val PRICING_TIMEOUT_MS = 30_000L
 
 private val KNOWN_SETS = setOf("OGN", "UNL", "SFD", "OGS")
 
@@ -69,11 +74,23 @@ class ScannerViewModel(
             ?: CONFIDENCE_NAME_FALLBACK
         _scanResult.value = ScanResult.Pricing(card, variant)
         viewModelScope.launch {
-            pricing.price(
-                card = card,
-                foil = variant == Variant.FOIL,
-                signature = variant == Variant.SIGNATURE,
-            )
+            val result = runCatching {
+                withTimeout(PRICING_TIMEOUT_MS) {
+                    pricing.price(
+                        card = card,
+                        foil = variant == Variant.FOIL,
+                        signature = variant == Variant.SIGNATURE,
+                    )
+                }
+            }.getOrElse { exc ->
+                Log.e(TAG, "Pricing timed out / threw for ${card.id} as $variant", exc)
+                val reason = if (exc is TimeoutCancellationException) {
+                    "Pricing timed out after ${PRICING_TIMEOUT_MS / 1000}s"
+                } else exc.message ?: "Pricing failed"
+                _scanResult.value = ScanResult.PricingFailed(card, variant, reason)
+                return@launch
+            }
+            result
                 .onSuccess { price ->
                     pack.append(
                         ScannedEntry(
@@ -115,7 +132,11 @@ class ScannerViewModel(
     private suspend fun identify(bitmap: Bitmap): ScanResult {
         return try {
             val alwaysPreprocess = settings.getCurrentSettings().forceOcrPreprocessing
-            val blocks = OcrService.recognize(bitmap, alwaysPreprocess = alwaysPreprocess)
+            // VERIFIED: phase-6 — OCR call wrapped in withTimeout(10s) so a stuck
+            // ML Kit call can't hang the scan flow indefinitely.
+            val blocks = withTimeout(OCR_TIMEOUT_MS) {
+                OcrService.recognize(bitmap, alwaysPreprocess = alwaysPreprocess)
+            }
             val parsed = CardOcrParser.parse(blocks)
 
             parsed.collectorNumber?.let { number ->

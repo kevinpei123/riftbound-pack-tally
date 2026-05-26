@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.riftbound.packtally.App
 import com.riftbound.packtally.core.pricing.CachedPricingRepository
+import com.riftbound.packtally.core.pricing.QuotaState
+import com.riftbound.packtally.core.pricing.QuotaTracker
 import com.riftbound.packtally.core.settings.AppSettings
 import com.riftbound.packtally.core.settings.Currency
 import com.riftbound.packtally.core.settings.SettingsRepository
@@ -33,6 +35,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val app = application as App
     private val settingsRepository: SettingsRepository = app.settingsRepository
     private val cachedPricing: CachedPricingRepository = app.cachedPricing
+    private val quotaTracker: QuotaTracker = app.quotaTracker
 
     val settings: StateFlow<AppSettings> =
         settingsRepository.settings.stateIn(
@@ -40,6 +43,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             started = SharingStarted.Eagerly,
             initialValue = AppSettings(),
         )
+
+    val quota: StateFlow<QuotaState> = quotaTracker.state
+
+    val useCachedOnly: StateFlow<Boolean> = quotaTracker.useCachedOnly
 
     private val _cacheSizeBytes = MutableStateFlow(0L)
     val cacheSizeBytes: StateFlow<Long> = _cacheSizeBytes.asStateFlow()
@@ -94,5 +101,17 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             _cacheSizeBytes.value = 0L
             _events.emit(SettingsEvent.ResetComplete)
         }
+    }
+
+    /** Debug-only — wipes today's quota counter to zero. */
+    fun resetQuotaCounter() {
+        viewModelScope.launch {
+            runCatching { quotaTracker.reset() }
+                .onFailure { Log.e(TAG, "Quota reset failed", it) }
+        }
+    }
+
+    fun setUseCachedOnly(value: Boolean) {
+        quotaTracker.setUseCachedOnly(value)
     }
 }

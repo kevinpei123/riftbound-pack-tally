@@ -10,13 +10,18 @@ the local debug keystore, no Google Play Services dependency.
 
 ## What it does
 
+- **Three scan modes**: Quick Scan (loose individual cards), Pack mode
+  (one 14-card booster), Box mode (24 packs of 14 = 336 cards).
 - Camera-based scanning of Riftbound cards via CameraX with a guide rectangle
   aimed at the bottom-left collector number.
 - On-device OCR via standalone ML Kit Text Recognition (no GMS required).
 - Auto-identification against a 950+ card local database scraped from the
   official Riftbound gallery.
-- Real-time market price lookup against tcgapi.dev with a 6-hour file cache
-  (configurable 1–24 h) to stay well under the free tier's 100 req/day cap.
+- Real-time market price lookup against tcgapi.dev with a 24-hour file cache
+  (configurable 1–48 h). **QuotaTracker** persists daily counter to DataStore,
+  fires a Snackbar at 80%, a confirm AlertDialog at 95%, and hard-blocks at
+  100%. Cache hits and 4xx/5xx don't count against quota, matching tcgapi.dev's
+  Hobby tier billing (1000 req/day).
 - Pack mode (14 cards) and Box mode (24 packs × 14 cards), with auto-rollover
   when a pack fills.
 - Manual correction of OCR misreads via a bottom sheet with the top-3 fuzzy
@@ -26,6 +31,8 @@ the local debug keystore, no Google Play Services dependency.
 - Multi-currency display (USD / EUR / GBP / AUD) with a manually-editable
   USD→target conversion rate.
 - Room-backed session persistence so a box-in-progress survives app restarts.
+- **Manual backup** to a zip in external files dir (db + sanitized prefs +
+  cache + manifest). Safe to share — API key is excluded.
 
 ## Tech stack
 
@@ -150,6 +157,64 @@ app/src/main/java/com/riftbound/packtally/
 scripts/
 └── build_cards_json.py          # Riftbound gallery scraper
 ```
+
+## First-time setup on a fresh phone
+
+```bash
+# On the phone: enable Developer Options + USB debugging (see prompt-19 walkthrough).
+
+# On laptop:
+./gradlew clean assembleDebug
+adb devices                                                # confirm P30 Pro detected
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.riftbound.packtally/.MainActivity
+```
+
+Inside the app: grant camera permission, Settings → paste your tcgapi.dev
+API key. Optionally toggle Force OCR preprocessing if your test cards are
+foils. Run through `docs/SMOKE_TEST.md` to verify.
+
+## Daily usage / box-day workflow
+
+1. **Before opening a box:** Settings → Backups → Back up now. Pulls a fresh
+   zip you can keep on USB.
+2. **Open the box:** Home → "Open a Box (24 packs)" → Start scanning.
+3. **Scan each pack:** 14 cards per pack. After the 14th, "Complete pack →"
+   appears in the sticky header.
+4. **Mid-box pause:** safe — every scan persists immediately. Force-stop the
+   app, come back later, Pack tab restores.
+5. **Quota check:** Settings → Quota card shows requests used today.
+   Reset counter only if you've genuinely wrapped to a new tier.
+6. **After the box:** Cards tab → Export JSON → `adb pull` for your records.
+
+See `docs/ARCHITECTURE.md` for the scan-to-record data flow, `docs/QA_CHECKLIST.md`
+for a pre-box checklist, `docs/SMOKE_TEST.md` for a 15-step post-install
+sanity sequence, and `docs/TROUBLESHOOTING.md` for symptom→fix mapping.
+
+## Quick Scan vs Pack mode vs Box mode
+
+| Mode | Use when | Where data goes |
+|---|---|---|
+| Quick Scan | Friend hands you a card. Single-card valuation. Testing OCR with a known card. | `loose_scans` table. Appears in Collection but separate from packs/boxes. |
+| Pack mode | Just opened one booster. Want to track exactly 14 cards. | Active `PackSession` in Room. |
+| Box mode | Opening a full 24-pack box. Want pack-by-pack subtotals + a grand total. | `BoxSession` with up to 24 `PackSession`s. Auto-rollover on the 15th scan. |
+
+## Known limitations / deferred work
+
+- **Restore from backup file** isn't fully wired — Settings shows the path,
+  but actual swap-the-db-and-reopen logic isn't implemented. Use `adb push`
+  + manual extract for now (see `docs/TROUBLESHOOTING.md`).
+- **Auto-backup via WorkManager** is scaffolded but the periodic job isn't
+  registered.
+- **`LooseScansScreen`** (list view of just loose scans with swipe-to-delete)
+  is mentioned in Phase 3 but defers to the Collection tab's grouped view.
+- **Source-breakdown chart** (pack vs loose) on Collection deferred.
+- **"Type instead" button on ScannerScreen (pack mode)** deferred — Quick Scan
+  has it after 3 OCR failures.
+- **Unit tests for `QuotaTracker`** with a real DataStore require either
+  Robolectric or `datastore-preferences-core` in `testImplementation`.
+- **`docs/PERFORMANCE.md`** has TARGETS but no measured numbers — run them on
+  the device.
 
 ## Disclaimer
 

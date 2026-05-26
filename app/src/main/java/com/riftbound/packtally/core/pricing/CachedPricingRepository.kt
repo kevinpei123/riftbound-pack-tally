@@ -1,10 +1,13 @@
 package com.riftbound.packtally.core.pricing
 
+import android.util.Log
 import com.riftbound.packtally.model.RiftboundCard
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.time.Duration
 import java.time.Instant
+
+private const val TAG = "CachedPricing"
 
 private val DEFAULT_TTL: Duration = Duration.ofHours(6)
 
@@ -80,6 +83,10 @@ class CachedPricingRepository(
         runCatching {
             pricesDir.mkdirs()
             file.writeText(json.encodeToString(CardPrice.serializer(), price))
+        }.onFailure { exc ->
+            // Best-effort: failed cache writes are non-fatal — the next request
+            // just refetches from network and tries to write again.
+            Log.w(TAG, "Cache write failed for ${file.name}: ${exc.message}")
         }
     }
 }

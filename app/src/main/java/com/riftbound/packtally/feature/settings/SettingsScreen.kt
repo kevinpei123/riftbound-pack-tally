@@ -15,8 +15,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -42,15 +45,20 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.core.settings.AppSettings
+import com.riftbound.packtally.core.pricing.QuotaState
 import com.riftbound.packtally.core.settings.Currency
+import java.time.Duration
+import java.time.Instant
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
     val vm: SettingsViewModel = viewModel()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val cacheSize by vm.cacheSizeBytes.collectAsStateWithLifecycle()
+    val quota by vm.quota.collectAsStateWithLifecycle()
+    val useCachedOnly by vm.useCachedOnly.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showResetDialog by remember { mutableStateOf(false) }
 
@@ -86,6 +94,13 @@ fun SettingsScreen() {
             onRateChange = vm::setConversionRate,
         )
 
+        QuotaCard(
+            quota = quota,
+            useCachedOnly = useCachedOnly,
+            onToggleCachedOnly = vm::setUseCachedOnly,
+            onResetCounter = vm::resetQuotaCounter,
+        )
+
         CacheTtlSection(
             ttlHours = settings.cacheTtlHours,
             onChange = vm::setCacheTtlHours,
@@ -100,6 +115,11 @@ fun SettingsScreen() {
             cacheSizeBytes = cacheSize,
             onClearCache = vm::clearCache,
         )
+
+        OutlinedButton(
+            onClick = onNavigateToBackup,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Backups & restore →") }
 
         Spacer(Modifier.height(8.dp))
         HorizontalDivider()
@@ -219,8 +239,10 @@ private fun CacheTtlSection(
         Slider(
             value = ttlHours.toFloat(),
             onValueChange = { onChange(it.roundToInt()) },
-            valueRange = 1f..24f,
-            steps = 22,
+            // CHOICE: 1..48h range per Phase 2 — Hobby tier benefits from a longer
+            // cache window than the original 1..24 design (default is now 24h).
+            valueRange = 1f..48f,
+            steps = 46,
         )
         Text(
             "Prices cached longer than this expire and refetch from tcgapi.dev.",
@@ -228,6 +250,78 @@ private fun CacheTtlSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+@Composable
+private fun QuotaCard(
+    quota: QuotaState,
+    useCachedOnly: Boolean,
+    onToggleCachedOnly: (Boolean) -> Unit,
+    onResetCounter: () -> Unit,
+) {
+    val tone = when {
+        quota.percentUsed >= 0.95f -> MaterialTheme.colorScheme.errorContainer
+        quota.percentUsed >= 0.80f -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = tone),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("tcgapi.dev quota (Hobby tier)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = "${quota.used} / ${quota.limit} requests today",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            LinearProgressIndicator(
+                progress = { quota.percentUsed.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = "Resets in ${formatDurationUntil(quota.resetsAt)} (UTC midnight)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Cache-only mode", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Block all network calls for this session. Cached prices " +
+                            "still load. Auto-clears on app restart or UTC midnight.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = useCachedOnly, onCheckedChange = onToggleCachedOnly)
+            }
+
+            OutlinedButton(
+                onClick = onResetCounter,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Reset counter (debug)") }
+        }
+    }
+}
+
+private fun formatDurationUntil(target: Instant): String {
+    val now = Instant.now()
+    if (!now.isBefore(target)) return "00:00"
+    val d = Duration.between(now, target)
+    val hours = d.toHours()
+    val minutes = d.toMinutes() % 60
+    return "%02d:%02d".format(hours, minutes)
 }
 
 @Composable

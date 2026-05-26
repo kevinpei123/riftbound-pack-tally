@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.riftbound.packtally.App
+import com.riftbound.packtally.core.persistence.LooseScanRepository
 import com.riftbound.packtally.core.persistence.SessionRepository
 import com.riftbound.packtally.feature.scanner.Variant
 import com.riftbound.packtally.model.Rarity
@@ -70,6 +71,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private val app = application as App
     private val sessionRepository: SessionRepository = app.sessionRepository
+    private val looseScanRepository: LooseScanRepository = app.looseScanRepository
 
     private val _allEntries = MutableStateFlow<List<CollectionEntry>>(emptyList())
     private val _filter = MutableStateFlow(CollectionFilter())
@@ -122,12 +124,17 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 .onFailure { Log.e(TAG, "Loading sessions failed", it) }
                 .getOrDefault(emptyList())
 
-            // "Completed" granularity = per-pack, not per-box. A pack with 14 entries
-            // is considered done even if its containing box isn't fully open yet.
+            // "Completed" granularity = per-pack, not per-box.
             val completedPacks = boxes.flatMap { it.packs.value }.filter { it.isFull }
-            val rawEntries = completedPacks.flatMap { it.entries.value }
-            _hasAnyCompletedPacks.value = completedPacks.isNotEmpty()
-            _allEntries.value = aggregate(rawEntries)
+            val packEntries = completedPacks.flatMap { it.entries.value }
+
+            // Loose scans (Phase 3) participate in Collection aggregation.
+            val looseEntries = runCatching { looseScanRepository.getAllForExport() }
+                .onFailure { Log.e(TAG, "Loading loose scans failed", it) }
+                .getOrDefault(emptyList())
+
+            _hasAnyCompletedPacks.value = completedPacks.isNotEmpty() || looseEntries.isNotEmpty()
+            _allEntries.value = aggregate(packEntries + looseEntries)
             _isLoading.value = false
         }
     }
@@ -154,7 +161,9 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
     fun exportToJson() {
         val snapshot = state.value
         viewModelScope.launch {
-            val path = runCatching { writeExport(snapshot) }
+            val looseSnapshot = runCatching { looseScanRepository.getAllForExport() }
+                .getOrDefault(emptyList())
+            val path = runCatching { writeExport(snapshot, looseSnapshot) }
                 .onFailure { Log.e(TAG, "Export failed", it) }
                 .getOrElse {
                     _events.emit(CollectionEvent.ExportFailed(it.message ?: "Export failed"))
@@ -199,14 +208,17 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private suspend fun writeExport(state: CollectionState): String = withContext(Dispatchers.IO) {
+    private suspend fun writeExport(
+        state: CollectionState,
+        looseEntries: List<ScannedEntry>,
+    ): String = withContext(Dispatchers.IO) {
         val context = getApplication<Application>()
         val dir = context.getExternalFilesDir(null)
             ?: error("External files dir unavailable")
         val timestamp = LocalDateTime.now()
             .format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
         val file = File(dir, "collection-$timestamp.json")
-        val payload = state.toExportPayload()
+        val payload = state.toExportPayload(looseEntries)
         file.writeText(exportJson.encodeToString(ExportPayload.serializer(), payload))
         file.absolutePath
     }
@@ -225,6 +237,20 @@ private data class ExportPayload(
     @SerialName("total_value") val totalValue: Double,
     @SerialName("total_cards") val totalCards: Int,
     val sets: List<SetGroupExport>,
+    @SerialName("loose_scans") val looseScans: List<LooseScanExport> = emptyList(),
+)
+
+@Serializable
+private data class LooseScanExport(
+    val id: String,
+    @SerialName("card_id") val cardId: String,
+    val name: String,
+    @SerialName("set_code") val setCode: String,
+    @SerialName("collector_number") val collectorNumber: String,
+    val rarity: String,
+    val variant: String,
+    @SerialName("market_price") val marketPrice: Double,
+    @SerialName("scanned_at") val scannedAt: String,
 )
 
 @Serializable
@@ -247,7 +273,9 @@ private data class EntryExport(
     @SerialName("total_value") val totalValue: Double,
 )
 
-private fun CollectionState.toExportPayload(): ExportPayload = ExportPayload(
+private fun CollectionState.toExportPayload(
+    looseEntries: List<ScannedEntry>,
+): ExportPayload = ExportPayload(
     exportedAt = Instant.now().atOffset(ZoneOffset.UTC).toString(),
     totalValue = totalValue,
     totalCards = totalCards,
@@ -256,6 +284,19 @@ private fun CollectionState.toExportPayload(): ExportPayload = ExportPayload(
             setCode = group.setCode,
             totalValue = group.totalValue,
             entries = group.entries.map { it.toExport() },
+        )
+    },
+    looseScans = looseEntries.map { entry ->
+        LooseScanExport(
+            id = entry.id,
+            cardId = entry.card.id,
+            name = entry.card.name,
+            setCode = entry.card.setCode,
+            collectorNumber = entry.card.collectorNumber,
+            rarity = entry.card.rarity.name,
+            variant = entry.variant.name,
+            marketPrice = entry.price.marketPrice,
+            scannedAt = entry.scannedAt.atOffset(ZoneOffset.UTC).toString(),
         )
     },
 )
