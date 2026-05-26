@@ -62,6 +62,8 @@ class ScannerViewModel(
     }
 
     fun recordCard(card: RiftboundCard, variant: Variant) {
+        val confidence = (_scanResult.value as? ScanResult.Identified)?.confidence
+            ?: CONFIDENCE_NAME_FALLBACK
         _scanResult.value = ScanResult.Pricing(card, variant)
         viewModelScope.launch {
             pricing.price(
@@ -75,6 +77,7 @@ class ScannerViewModel(
                             card = card,
                             variant = variant,
                             price = price,
+                            confidence = confidence,
                             scannedAt = Instant.now(),
                         ),
                     )

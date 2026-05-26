@@ -40,6 +40,27 @@ class PackSession(
         return true
     }
 
+    /** Remove the entry with [entryId]. Returns false if not present. */
+    fun removeEntry(entryId: String): Boolean {
+        val current = _entries.value
+        val updated = current.filterNot { it.id == entryId }
+        if (updated.size == current.size) return false
+        _entries.value = updated
+        _runningTotal.value = updated.sumOf { it.price.marketPrice }
+        return true
+    }
+
+    /** Replace the entry with [entryId] in place. Returns false if not present. */
+    fun replaceEntry(entryId: String, newEntry: ScannedEntry): Boolean {
+        val current = _entries.value
+        val index = current.indexOfFirst { it.id == entryId }
+        if (index < 0) return false
+        val updated = current.toMutableList().apply { set(index, newEntry) }
+        _entries.value = updated
+        _runningTotal.value = updated.sumOf { it.price.marketPrice }
+        return true
+    }
+
     companion object {
         const val CAPACITY = 14
 

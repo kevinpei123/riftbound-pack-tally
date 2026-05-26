@@ -66,6 +66,28 @@ class BoxSession(
         return true
     }
 
+    /** Locate the pack containing [entryId] and remove the entry. */
+    fun removeEntry(entryId: String): Boolean {
+        for (pack in _packs.value) {
+            if (pack.removeEntry(entryId)) {
+                recomputeGrandTotal()
+                return true
+            }
+        }
+        return false
+    }
+
+    /** Locate the pack containing [entryId] and replace the entry in place. */
+    fun replaceEntry(entryId: String, newEntry: ScannedEntry): Boolean {
+        for (pack in _packs.value) {
+            if (pack.replaceEntry(entryId, newEntry)) {
+                recomputeGrandTotal()
+                return true
+            }
+        }
+        return false
+    }
+
     private fun currentOpenPackOrStart(): PackSession? {
         val current = _packs.value.lastOrNull()
         return when {

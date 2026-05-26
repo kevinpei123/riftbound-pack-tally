@@ -51,6 +51,7 @@ fun PackScreen(onNavigateToScanner: () -> Unit) {
     val box by packVm.box.collectAsStateWithLifecycle()
     val packs by box.packs.collectAsStateWithLifecycle()
     val grandTotal by box.grandTotal.collectAsStateWithLifecycle()
+    val correction by packVm.correction.collectAsStateWithLifecycle()
     val activePack = packs.lastOrNull()
 
     val entries: List<ScannedEntry>
@@ -99,12 +100,27 @@ fun PackScreen(onNavigateToScanner: () -> Unit) {
             items(PackSession.CAPACITY) { index ->
                 val entry = entries.getOrNull(index)
                 if (entry != null) {
-                    FilledCell(entry = entry, modifier = Modifier.aspectRatio(0.72f))
+                    FilledCell(
+                        entry = entry,
+                        onClick = { packVm.beginCorrection(entry) },
+                        modifier = Modifier.aspectRatio(0.72f),
+                    )
                 } else {
                     EmptyCell(onClick = onNavigateToScanner, modifier = Modifier.aspectRatio(0.72f))
                 }
             }
         }
+    }
+
+    correction?.let { state ->
+        CorrectionSheet(
+            state = state,
+            onDismiss = packVm::cancelCorrection,
+            onDelete = packVm::deleteEntry,
+            onApply = { newCard, newVariant ->
+                packVm.applyReplacement(state.entry, newCard, newVariant)
+            },
+        )
     }
 }
 
@@ -172,9 +188,14 @@ private fun PackHeader(
 }
 
 @Composable
-private fun FilledCell(entry: ScannedEntry, modifier: Modifier = Modifier) {
+private fun FilledCell(
+    entry: ScannedEntry,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Card(
         modifier = modifier,
+        onClick = onClick,
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
