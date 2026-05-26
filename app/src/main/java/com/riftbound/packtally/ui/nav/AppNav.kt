@@ -17,6 +17,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.riftbound.packtally.feature.box.BoxScreen
+import com.riftbound.packtally.feature.collection.CollectionScreen
 import com.riftbound.packtally.feature.home.HomeScreen
 import com.riftbound.packtally.feature.pack.PackScreen
 import com.riftbound.packtally.feature.scanner.ScannerScreen
@@ -60,6 +61,7 @@ fun AppNav() {
                 )
             }
             composable(Destination.Box.route) { BoxScreen() }
+            composable(Destination.Collection.route) { CollectionScreen() }
             composable(Destination.Settings.route) { SettingsScreen() }
         }
     }

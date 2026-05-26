@@ -12,6 +12,9 @@ interface SessionDao {
     @Query("SELECT * FROM box_sessions ORDER BY startedAt DESC LIMIT 1")
     suspend fun mostRecentBox(): BoxSessionEntity?
 
+    @Query("SELECT * FROM box_sessions ORDER BY startedAt DESC")
+    suspend fun allBoxes(): List<BoxSessionEntity>
+
     @Query("SELECT * FROM pack_sessions WHERE boxId = :boxId ORDER BY position ASC")
     suspend fun packsForBox(boxId: String): List<PackSessionEntity>
 

@@ -23,6 +23,14 @@ class SessionRepository(private val dao: SessionDao) {
 
     suspend fun loadMostRecentBox(): BoxSession? = withContext(Dispatchers.IO) {
         val boxEntity = dao.mostRecentBox() ?: return@withContext null
+        hydrate(boxEntity)
+    }
+
+    suspend fun loadAllBoxes(): List<BoxSession> = withContext(Dispatchers.IO) {
+        dao.allBoxes().map { hydrate(it) }
+    }
+
+    private suspend fun hydrate(boxEntity: BoxSessionEntity): BoxSession {
         val mode = runCatching { BoxSession.Mode.valueOf(boxEntity.mode) }
             .getOrDefault(BoxSession.Mode.BOX)
 
@@ -41,7 +49,7 @@ class SessionRepository(private val dao: SessionDao) {
             )
         }
 
-        BoxSession(
+        return BoxSession(
             id = boxEntity.id,
             startedAt = Instant.ofEpochMilli(boxEntity.startedAt),
             mode = mode,
