@@ -17,6 +17,13 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
+        // Personal-use target is a Huawei P30 Pro, which is arm64. Keeping
+        // only arm64 native libs avoids shipping duplicate ML Kit/CameraX
+        // binaries in the sideloaded debug APK.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -43,11 +50,18 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
         }
     }
 }
@@ -100,6 +114,7 @@ dependencies {
 
     // Unit tests
     testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 tasks.withType<Test>().configureEach {

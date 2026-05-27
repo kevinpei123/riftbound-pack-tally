@@ -28,7 +28,7 @@ private const val TAG = "CardDbSync"
  * a Flow so the UI can react to sync completion.
  */
 class CardDbSync(
-    private val client: RiftcodexClient,
+    private val client: RiftcodexCardSource,
     private val cardDao: CardDao,
     private val dataStore: DataStore<Preferences>,
 ) {
@@ -56,6 +56,18 @@ class CardDbSync(
                 "Dropped ${dtos.size - entities.size} cards lacking tcgplayer_id or riftbound_id",
             )
         }
+        // Refuse to commit an empty catalogue. Without this guard, a schema
+        // drift on the Riftcodex side (e.g. envelope key change) silently wipes
+        // the local table AND marks it as synced, leaving the app stuck on an
+        // empty DB until the user finds the Settings re-sync button. Throwing
+        // here surfaces the failure on FirstLaunchScreen and leaves any prior
+        // good state intact.
+        if (entities.isEmpty()) {
+            error(
+                "Riftcodex returned ${dtos.size} cards but none matched the expected " +
+                    "schema. Check that the Riftcodex API contract hasn't changed.",
+            )
+        }
         // Strategy: full replace (deleteAll + upsert). Riftcodex is the source
         // of truth; we don't merge. ~1k rows so the throwaway is cheap.
         cardDao.deleteAll()
@@ -78,12 +90,28 @@ class CardDbSync(
             Log.d(TAG, "Card ${id} (${name}) missing riftbound_id; skipping")
             return null
         }
-        // Riftbound IDs look like "OGN-011" — set code is before the dash.
-        val setCode = rifId.substringBefore('-', missingDelimiterValue = "")
+        // Riftcodex's riftbound_id is lowercase "set-num[letter]-total"
+        // (e.g. "unl-060a-219", "ogn-181-298"). The OCR parser keys lookups
+        // off "SET-NUM" (uppercase, no total) — see CardDatabase.lookupByNumber —
+        // so we normalise the same shape here. The alt-art letter suffix is
+        // preserved so the regular print and its alt-art share the (set, number)
+        // base but stay distinct rows.
+        val parts = rifId.split('-')
+        if (parts.size < 2) {
+            Log.d(TAG, "Card $id has unexpected riftbound_id '$rifId'; skipping")
+            return null
+        }
+        val numWithSuffix = parts[1]
+        val setCode = (
+            set?.setId?.takeIf { it.isNotBlank() }
+                ?: set?.id?.takeIf { it.isNotBlank() }
+                ?: parts[0]
+            ).uppercase()
+        val collectorNumber = "$setCode-$numWithSuffix"
         return CardEntity(
             id = id,
             name = name,
-            collectorNumber = rifId,
+            collectorNumber = collectorNumber,
             setCode = setCode.ifBlank { "UNK" },
             rarity = (classification?.rarity ?: "common").lowercase(),
             isFoilByDefault = false,

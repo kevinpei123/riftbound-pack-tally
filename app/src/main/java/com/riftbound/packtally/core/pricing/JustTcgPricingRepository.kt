@@ -1,7 +1,8 @@
 package com.riftbound.packtally.core.pricing
 
 import android.util.Log
-import com.riftbound.packtally.feature.scanner.Variant
+import com.riftbound.packtally.model.CardPrice
+import com.riftbound.packtally.model.Variant
 import kotlinx.coroutines.delay
 import java.time.Instant
 
@@ -31,20 +32,18 @@ private const val INTER_BATCH_DELAY_MS = 100L
  * highest-priced variant.
  */
 class JustTcgPricingRepository(
-    private val client: JustTcgClient,
+    private val client: JustTcgApiClient,
     private val quota: QuotaTracker? = null,
 ) : PricingRepository {
 
     override suspend fun priceMany(
         requests: List<PriceRequest>,
-    ): Map<String, Result<CardPrice>> {
+    ): Map<PriceRequest, Result<CardPrice>> {
         if (requests.isEmpty()) return emptyMap()
 
-        val variantByTcgplayerId: Map<String, Variant> =
-            requests.associate { it.tcgplayerId to it.variant }
-
-        val results = mutableMapOf<String, Result<CardPrice>>()
-        val chunks = requests.distinctBy { it.tcgplayerId }.chunked(JustTcgClient.MAX_BATCH)
+        val results = mutableMapOf<PriceRequest, Result<CardPrice>>()
+        val distinctRequests = requests.distinctBy { it.tcgplayerId to it.variant }
+        val chunks = distinctRequests.chunked(JustTcgClient.MAX_BATCH)
 
         chunks.forEachIndexed { idx, chunk ->
             if (idx > 0) delay(INTER_BATCH_DELAY_MS)
@@ -54,13 +53,13 @@ class JustTcgPricingRepository(
                 if (q.isAtCapacity()) {
                     val state = q.currentState()
                     chunk.forEach { req ->
-                        results[req.tcgplayerId] = Result.failure(RateLimitedException(state))
+                        results[req] = Result.failure(RateLimitedException(state))
                     }
                     return@forEachIndexed
                 }
                 if (q.useCachedOnly.value) {
                     chunk.forEach { req ->
-                        results[req.tcgplayerId] = Result.failure(CachedOnlyModeException())
+                        results[req] = Result.failure(CachedOnlyModeException())
                     }
                     return@forEachIndexed
                 }
@@ -82,8 +81,9 @@ class JustTcgPricingRepository(
             val response = runCatching { client.postCards(items) }
                 .getOrElse { exc ->
                     Log.e(TAG, "Batch ${idx + 1}/${chunks.size} failed", exc)
+                    val mapped = exc.toPricingException()
                     chunk.forEach { req ->
-                        results[req.tcgplayerId] = Result.failure(exc)
+                        results[req] = Result.failure(mapped)
                     }
                     return@forEachIndexed
                 }
@@ -92,29 +92,28 @@ class JustTcgPricingRepository(
             quota?.recordNetworkCall(calls = 1)
             response.metadata?.let { quota?.applyServerHints(it) }
 
-            response.data.forEach { card ->
-                val variant = variantByTcgplayerId[card.tcgplayerId] ?: return@forEach
-                val filter = client.filterFor(variant)
+            val responseById = response.data.associateBy { it.tcgplayerId }
+            chunk.forEach { req ->
+                val card = responseById[req.tcgplayerId]
+                if (card == null) {
+                    results[req] = Result.failure(NotFoundException(req.tcgplayerId))
+                    return@forEach
+                }
+                val filter = client.filterFor(req.variant)
                 val pickedVariant = pickVariant(card.variants, filter)
                 if (pickedVariant == null) {
-                    results[card.tcgplayerId] = Result.failure(
+                    results[req] = Result.failure(
                         NoMatchingVariantException(card.tcgplayerId, filter),
                     )
                     return@forEach
                 }
                 val price = pickedVariant.toCardPrice()
                 if (price == null) {
-                    results[card.tcgplayerId] = Result.failure(
+                    results[req] = Result.failure(
                         IllegalStateException("JustTCG returned no price fields for ${card.tcgplayerId}"),
                     )
                 } else {
-                    results[card.tcgplayerId] = Result.success(price)
-                }
-            }
-            // Mark any chunk-requested IDs missing from the response as not-found.
-            chunk.forEach { req ->
-                if (req.tcgplayerId !in results) {
-                    results[req.tcgplayerId] = Result.failure(NotFoundException(req.tcgplayerId))
+                    results[req] = Result.success(price)
                 }
             }
         }
@@ -153,6 +152,17 @@ class JustTcgPricingRepository(
     }
 }
 
+private fun Throwable.toPricingException(): Throwable {
+    val http = this as? retrofit2.HttpException ?: return this
+    return when (http.code()) {
+        400 -> InvalidPricingRequestException()
+        401 -> ApiKeyRejectedException()
+        429 -> ServerRateLimitedException()
+        in 500..599 -> PricingServerException(http.code())
+        else -> this
+    }
+}
+
 class NoMatchingVariantException(
     val tcgplayerId: String,
     val filter: VariantFilter,
@@ -160,3 +170,15 @@ class NoMatchingVariantException(
 
 class NotFoundException(val tcgplayerId: String) :
     Exception("JustTCG: tcgplayerId=$tcgplayerId not present in response")
+
+class InvalidPricingRequestException :
+    Exception("JustTCG rejected the pricing request. Check card IDs and variants.")
+
+class ApiKeyRejectedException :
+    Exception("JustTCG API key missing or rejected. Re-enter the key in Settings.")
+
+class ServerRateLimitedException :
+    Exception("JustTCG rate limit reached. Wait, use cache-only mode, or retry later.")
+
+class PricingServerException(code: Int) :
+    Exception("JustTCG server error ($code). Prices were not saved; retry later.")

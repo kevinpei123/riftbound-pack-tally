@@ -1,6 +1,7 @@
 package com.riftbound.packtally.core.pricing
 
 import android.util.Log
+import com.riftbound.packtally.model.CardPrice
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.time.Duration
@@ -45,17 +46,17 @@ class CachedPricingRepository(
 
     override suspend fun priceMany(
         requests: List<PriceRequest>,
-    ): Map<String, Result<CardPrice>> {
+    ): Map<PriceRequest, Result<CardPrice>> {
         if (requests.isEmpty()) return emptyMap()
 
         val ttl = ttlProvider()
-        val results = mutableMapOf<String, Result<CardPrice>>()
+        val results = mutableMapOf<PriceRequest, Result<CardPrice>>()
         val misses = mutableListOf<PriceRequest>()
 
         for (req in requests.distinctBy { it.tcgplayerId to it.variant }) {
             val cached = readFresh(req, ttl)
             if (cached != null) {
-                results[req.tcgplayerId] = Result.success(cached)
+                results[req] = Result.success(cached)
             } else {
                 misses += req
             }
@@ -64,12 +65,11 @@ class CachedPricingRepository(
         if (misses.isEmpty()) return results
 
         val fetched = delegate.priceMany(misses)
-        for ((tcgplayerId, result) in fetched) {
+        for ((request, result) in fetched) {
             result.onSuccess { price ->
-                val variant = misses.first { it.tcgplayerId == tcgplayerId }.variant
-                write(req = PriceRequest(tcgplayerId, variant), price = price)
+                write(req = request, price = price)
             }
-            results[tcgplayerId] = result
+            results[request] = result
         }
 
         return results

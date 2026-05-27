@@ -74,4 +74,30 @@ class SessionRepository(private val dao: SessionDao) {
         }
         dao.saveBoxWithPacks(boxEntity, packEntities)
     }
+
+    /**
+     * Walks every persisted box, newest-first, and removes the most recent
+     * pack entry matching [cardId] + [variantName]. Used by CollectionViewModel
+     * when the Collection list shows a card whose only remaining source is a
+     * sealed/completed pack and the user taps remove from there.
+     *
+     * Returns `true` if a row was found and removed (Box was saved back).
+     */
+    suspend fun removeOneByCardVariant(cardId: String, variantName: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val boxes = loadAllBoxes()
+            for (box in boxes) {
+                // Iterate packs latest-first so we always pull from the most
+                // recent open(ish) pack rather than the first ever opened.
+                for (pack in box.packs.value.reversed()) {
+                    val match = pack.entries.value.firstOrNull {
+                        it.card.id == cardId && it.variant.name == variantName
+                    } ?: continue
+                    pack.removeEntry(match.id)
+                    save(box)
+                    return@withContext true
+                }
+            }
+            false
+        }
 }

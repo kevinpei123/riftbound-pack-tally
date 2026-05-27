@@ -7,10 +7,10 @@ import androidx.lifecycle.viewModelScope
 import com.riftbound.packtally.App
 import com.riftbound.packtally.core.persistence.LooseScanRepository
 import com.riftbound.packtally.core.persistence.SessionRepository
-import com.riftbound.packtally.feature.scanner.Variant
 import com.riftbound.packtally.model.Rarity
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.ScannedEntry
+import com.riftbound.packtally.model.Variant
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -39,12 +40,20 @@ data class CollectionEntry(
     val quantity: Int,
     val unitPrice: Double,
     val totalMarketValue: Double,
+    /** Subset of [quantity] that came from loose scans (manual add / Quick Scan). */
+    val looseQuantity: Int = 0,
+    /** Subset of [quantity] that came from pack scans. Always = quantity - looseQuantity. */
+    val packQuantity: Int = 0,
+    /** True if at least one copy needs a price fetched. */
+    val hasPendingPrice: Boolean = false,
 )
 
 data class CollectionFilter(
     val foilOnly: Boolean = false,
     val signatureOnly: Boolean = false,
+    val looseOnly: Boolean = false,
     val selectedRarities: Set<Rarity> = emptySet(),
+    val nameQuery: String = "",
 )
 
 data class CollectionGroup(
@@ -65,6 +74,19 @@ data class CollectionState(
 sealed interface CollectionEvent {
     data class ExportSucceeded(val path: String) : CollectionEvent
     data class ExportFailed(val reason: String) : CollectionEvent
+
+    /** Manual "+ Add card" succeeded; UI shows a confirmation toast. */
+    data class ManualAddSucceeded(val cardName: String) : CollectionEvent
+
+    data class RemoveSucceeded(val cardName: String) : CollectionEvent
+
+    /** Row vanished between when the list was rendered and the user tapped
+     *  remove — vanishingly rare; surface a soft error so the user knows
+     *  nothing happened. */
+    data class RemoveNotFound(val cardName: String) : CollectionEvent
+
+    data class SubmitCompleted(val priced: Int, val failed: Int, val totalValue: Double) : CollectionEvent
+    data class SubmitFailed(val reason: String) : CollectionEvent
 }
 
 class CollectionViewModel(application: Application) : AndroidViewModel(application) {
@@ -77,6 +99,10 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _filter = MutableStateFlow(CollectionFilter())
     private val _isLoading = MutableStateFlow(true)
     private val _hasAnyCompletedPacks = MutableStateFlow(false)
+    private val _pendingPriceCount = MutableStateFlow(0)
+    val pendingPriceCount: StateFlow<Int> = _pendingPriceCount.asStateFlow()
+    private val _submitInFlight = MutableStateFlow(false)
+    val submitInFlight: StateFlow<Boolean> = _submitInFlight.asStateFlow()
 
     val state: StateFlow<CollectionState> =
         combine(
@@ -124,18 +150,45 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 .onFailure { Log.e(TAG, "Loading sessions failed", it) }
                 .getOrDefault(emptyList())
 
-            // "Completed" granularity = per-pack, not per-box.
-            val completedPacks = boxes.flatMap { it.packs.value }.filter { it.isFull }
-            val packEntries = completedPacks.flatMap { it.entries.value }
+            // Every scanned card appears in Collection — pack entries no longer
+            // wait for the pack to be "full" / submitted. Unpriced entries just
+            // show with $0 totals until the user submits and prices land.
+            val allPackEntries = boxes.flatMap { box -> box.packs.value.flatMap { it.entries.value } }
 
             // Loose scans participate in Collection aggregation.
             val looseEntries = runCatching { looseScanRepository.getAllForExport() }
                 .onFailure { Log.e(TAG, "Loading loose scans failed", it) }
                 .getOrDefault(emptyList())
 
-            _hasAnyCompletedPacks.value = completedPacks.isNotEmpty() || looseEntries.isNotEmpty()
-            _allEntries.value = aggregate(packEntries + looseEntries)
+            _hasAnyCompletedPacks.value = allPackEntries.isNotEmpty() || looseEntries.isNotEmpty()
+            _allEntries.value = aggregate(allPackEntries + looseEntries)
+            _pendingPriceCount.value = runCatching { looseScanRepository.getPending().size }
+                .getOrDefault(0)
             _isLoading.value = false
+        }
+    }
+
+    /** Identical to QuickScanViewModel.submitPending, but reachable from Collection. */
+    fun submitPendingPrices() {
+        if (_submitInFlight.value) return
+        _submitInFlight.value = true
+        viewModelScope.launch {
+            when (val result = looseScanRepository.submitPendingPrices(app.pricing)) {
+                is com.riftbound.packtally.core.persistence.LooseScanRepository.SubmitResult.Empty ->
+                    _events.emit(CollectionEvent.SubmitCompleted(priced = 0, failed = 0, totalValue = 0.0))
+                is com.riftbound.packtally.core.persistence.LooseScanRepository.SubmitResult.Done ->
+                    _events.emit(
+                        CollectionEvent.SubmitCompleted(
+                            priced = result.priced,
+                            failed = result.failed,
+                            totalValue = result.totalValue,
+                        ),
+                    )
+                is com.riftbound.packtally.core.persistence.LooseScanRepository.SubmitResult.NetworkError ->
+                    _events.emit(CollectionEvent.SubmitFailed(result.reason))
+            }
+            _submitInFlight.value = false
+            refresh()
         }
     }
 
@@ -154,8 +207,64 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    fun toggleLooseOnlyFilter() {
+        _filter.value = _filter.value.copy(looseOnly = !_filter.value.looseOnly)
+    }
+
+    fun setNameQuery(query: String) {
+        _filter.value = _filter.value.copy(nameQuery = query)
+    }
+
     fun clearFilters() {
         _filter.value = CollectionFilter()
+    }
+
+    /**
+     * Persist a card the user added by hand (not via OCR). Stored as a loose
+     * scan with `price = null` — the next batch submit on the Quick Scan tab
+     * picks it up. We deliberately don't auto-fire a single-card pricing call,
+     * since that would burn one JustTCG quota slot per add.
+     */
+    fun addManualEntry(card: RiftboundCard, variant: Variant) {
+        viewModelScope.launch {
+            runCatching { looseScanRepository.saveEntry(card, variant, price = null) }
+                .onFailure { Log.e(TAG, "Manual add failed for ${card.id} $variant", it) }
+                .onSuccess {
+                    _events.emit(CollectionEvent.ManualAddSucceeded(card.name))
+                    refresh()
+                }
+        }
+    }
+
+    /**
+     * Remove one copy of (card, variant). Preference order:
+     *   1. The most recent loose-scan row (manual add or quick-scan).
+     *   2. Failing that, the most recent matching entry inside any persisted pack.
+     *
+     * Reaching into past packs matters because the Pack tab only shows the
+     * active pack — if a card lives in a previously-completed pack the user
+     * has no other way to remove it. Surfacing it here keeps Collection as the
+     * single source of truth for "what do I own".
+     */
+    fun removeOne(card: RiftboundCard, variant: Variant) {
+        viewModelScope.launch {
+            val looseDeleted = runCatching { looseScanRepository.deleteOneMatching(card.id, variant) }
+                .onFailure { Log.e(TAG, "Loose remove failed for ${card.id} $variant", it) }
+                .getOrDefault(false)
+            val deleted = if (looseDeleted) {
+                true
+            } else {
+                runCatching { sessionRepository.removeOneByCardVariant(card.id, variant.name) }
+                    .onFailure { Log.e(TAG, "Pack remove failed for ${card.id} $variant", it) }
+                    .getOrDefault(false)
+            }
+            if (deleted) {
+                _events.emit(CollectionEvent.RemoveSucceeded(card.name))
+            } else {
+                _events.emit(CollectionEvent.RemoveNotFound(card.name))
+            }
+            refresh()
+        }
     }
 
     fun exportToJson() {
@@ -179,16 +288,26 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             .map { (_, group) ->
                 val card = group.first().card
                 val variant = group.first().variant
+                // Pick the most recently-priced entry in the group as the
+                // representative unit price; if nothing is priced yet, fall
+                // back to 0 so the row still appears in the list.
                 val unitPrice = group
-                    .maxByOrNull { it.price.lastUpdated }
+                    .filter { it.price != null }
+                    .maxByOrNull { it.price!!.lastUpdated }
                     ?.price?.marketPrice
                     ?: 0.0
+                // Loose-scan entries are tagged "loose-<rowid>" by
+                // LooseScanRepository; everything else is a pack scan.
+                val looseQty = group.count { it.id.startsWith("loose-") }
                 CollectionEntry(
                     card = card,
                     variant = variant,
                     quantity = group.size,
                     unitPrice = unitPrice,
-                    totalMarketValue = group.sumOf { it.price.marketPrice },
+                    totalMarketValue = group.sumOf { it.marketPrice },
+                    looseQuantity = looseQty,
+                    packQuantity = group.size - looseQty,
+                    hasPendingPrice = group.any { it.price == null },
                 )
             }
 
@@ -202,9 +321,12 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             filter.signatureOnly -> setOf(Variant.SIGNATURE)
             else -> Variant.entries.toSet()
         }
+        val nameQuery = filter.nameQuery.trim().lowercase()
         return entries.filter { entry ->
             entry.variant in allowedVariants &&
-                (filter.selectedRarities.isEmpty() || entry.card.rarity in filter.selectedRarities)
+                (filter.selectedRarities.isEmpty() || entry.card.rarity in filter.selectedRarities) &&
+                (!filter.looseOnly || entry.looseQuantity > 0) &&
+                (nameQuery.isEmpty() || entry.card.name.lowercase().contains(nameQuery))
         }
     }
 
@@ -295,7 +417,7 @@ private fun CollectionState.toExportPayload(
             collectorNumber = entry.card.collectorNumber,
             rarity = entry.card.rarity.name,
             variant = entry.variant.name,
-            marketPrice = entry.price.marketPrice,
+            marketPrice = entry.marketPrice,
             scannedAt = entry.scannedAt.atOffset(ZoneOffset.UTC).toString(),
         )
     },

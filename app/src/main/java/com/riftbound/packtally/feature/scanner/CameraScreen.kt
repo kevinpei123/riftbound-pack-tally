@@ -11,12 +11,13 @@ import android.util.Log
 import android.view.Surface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.view.PreviewView
@@ -58,15 +59,20 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 private const val TAG = "CameraScreen"
 
 /**
- * Normalized capture region, as fractions of the camera preview area.
- * Sized and positioned for the bottom-left corner of a portrait TCG card
- * held at arm's length filling roughly the screen width.
+ * Normalized capture region, as fractions of the camera preview area. Sized for
+ * a standard 63×88 mm TCG card aspect (≈5:7) centred in a 9:16 portrait preview,
+ * with a small margin so a slightly misaligned card still fits inside the crop.
+ *
+ * The crop is the OCR input — capturing the whole card (not just the corner)
+ * lets the parser pick up the printed collector code (e.g. "UNL 156/219") in
+ * the bottom-left, the card name at the top, and body text in between.
  */
-val DEFAULT_GUIDE_RECT: Rect = Rect(left = 0.06f, top = 0.62f, right = 0.42f, bottom = 0.78f)
+val DEFAULT_GUIDE_RECT: Rect = Rect(left = 0.05f, top = 0.145f, right = 0.95f, bottom = 0.855f)
 
 @Composable
 fun CameraScreen(
@@ -155,7 +161,8 @@ private fun CameraSurface(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val executor = remember { ContextCompat.getMainExecutor(context) }
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
 
     val previewView = remember {
         PreviewView(context).apply {
@@ -167,31 +174,53 @@ private fun CameraSurface(
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
+    // Track only the use-cases THIS CameraScreen instance bound. ProcessCameraProvider
+    // is a process-wide singleton; if we called unbindAll() from onDispose, a
+    // late-firing teardown after the next tab's screen has already bound its
+    // own Preview/ImageCapture would wipe THAT screen's binding too. Per-screen
+    // tracking lets us release only what we own.
+    val ownedUseCases = remember { mutableStateOf<Pair<Preview, ImageCapture>?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraExecutor.shutdown()
+        }
+    }
 
     LaunchedEffect(Unit) {
         try {
             val provider = ProcessCameraProvider.awaitInstance(context)
             cameraProvider = provider
 
+            // Defensive: drop any stale use-cases this same CameraScreen
+            // instance bound before (e.g. on a survived state recompose).
+            ownedUseCases.value?.let { (preview, capture) ->
+                runCatching { provider.unbind(preview, capture) }
+            }
+
+            val resolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                .build()
+
             val preview = Preview.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                .setResolutionSelector(resolutionSelector)
                 .setTargetRotation(Surface.ROTATION_0)
                 .build()
                 .also { it.surfaceProvider = previewView.surfaceProvider }
 
             val capture = ImageCapture.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                .setResolutionSelector(resolutionSelector)
                 .setTargetRotation(Surface.ROTATION_0)
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                 .build()
 
-            provider.unbindAll()
             provider.bindToLifecycle(
                 lifecycleOwner,
                 CameraSelector.DEFAULT_BACK_CAMERA,
                 preview,
                 capture,
             )
+            ownedUseCases.value = preview to capture
             imageCapture = capture
         } catch (e: Exception) {
             Log.e(TAG, "Camera setup failed", e)
@@ -200,7 +229,13 @@ private fun CameraSurface(
     }
 
     DisposableEffect(Unit) {
-        onDispose { cameraProvider?.unbindAll() }
+        onDispose {
+            val provider = cameraProvider
+            val bound = ownedUseCases.value
+            if (provider != null && bound != null) {
+                runCatching { provider.unbind(bound.first, bound.second) }
+            }
+        }
     }
 
     Box(modifier = modifier.background(Color.Black)) {
@@ -227,7 +262,8 @@ private fun CameraSurface(
                 isCapturing = true
                 takeAndCrop(
                     imageCapture = capture,
-                    executor = executor,
+                    cameraExecutor = cameraExecutor,
+                    resultExecutor = mainExecutor,
                     guideRect = guideRect,
                     onCaptured = { bmp ->
                         isCapturing = false
@@ -277,8 +313,10 @@ private fun GuideOverlay(
         drawRect(dim, topLeft = Offset(r, t), size = Size(w - r, b - t))
         drawRect(dim, topLeft = Offset(0f, b), size = Size(w, h - b))
 
-        // Corner brackets — easier to align against than a full border
-        val bracket = (b - t) * 0.22f
+        // Corner brackets — easier to align against than a full border. Size in
+        // dp so they stay visually consistent regardless of how big the guide
+        // rect is on screen.
+        val bracket = 28.dp.toPx()
         val stroke = 4.dp.toPx()
         // top-left
         drawLine(accent, Offset(l, t), Offset(l + bracket, t), stroke)
@@ -297,29 +335,30 @@ private fun GuideOverlay(
 
 private fun takeAndCrop(
     imageCapture: ImageCapture,
-    executor: Executor,
+    cameraExecutor: Executor,
+    resultExecutor: Executor,
     guideRect: Rect,
     onCaptured: (Bitmap) -> Unit,
     onError: (Throwable) -> Unit,
 ) {
     imageCapture.takePicture(
-        executor,
+        cameraExecutor,
         object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
                 try {
                     val rotated = image.toRotatedBitmap()
                     val cropped = rotated.cropToNormalizedRect(guideRect)
                     if (cropped !== rotated) rotated.recycle()
-                    onCaptured(cropped)
+                    resultExecutor.execute { onCaptured(cropped) }
                 } catch (e: Throwable) {
-                    onError(e)
+                    resultExecutor.execute { onError(e) }
                 } finally {
                     image.close()
                 }
             }
 
             override fun onError(exception: ImageCaptureException) {
-                onError(exception)
+                resultExecutor.execute { onError(exception) }
             }
         },
     )

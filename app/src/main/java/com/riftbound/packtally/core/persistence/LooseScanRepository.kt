@@ -2,10 +2,12 @@ package com.riftbound.packtally.core.persistence
 
 import android.util.Log
 import com.riftbound.packtally.core.carddb.CardDatabase
-import com.riftbound.packtally.core.pricing.CardPrice
-import com.riftbound.packtally.feature.scanner.Variant
+import com.riftbound.packtally.core.pricing.PriceRequest
+import com.riftbound.packtally.core.pricing.PricingRepository
+import com.riftbound.packtally.model.CardPrice
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.ScannedEntry
+import com.riftbound.packtally.model.Variant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -30,20 +32,95 @@ class LooseScanRepository(private val dao: LooseScanDao) {
         rows.mapNotNull { it.toScannedEntryOrNull() }
     }
 
+    /**
+     * Persist a scanned card. [price] may be `null` — that's the normal path
+     * since QuickScan defers pricing to a batched submit. The empty-string
+     * sentinel for `priceJson` keeps the column non-null without a Room
+     * migration; [toScannedEntryOrNull] decodes it back to a null price.
+     */
     suspend fun saveEntry(
         card: RiftboundCard,
         variant: Variant,
-        price: CardPrice,
+        price: CardPrice? = null,
         notes: String? = null,
     ): Long = withContext(Dispatchers.IO) {
         val entity = LooseScanEntity(
             cardId = card.id,
             variant = variant.name,
-            priceJson = json.encodeToString(CardPrice.serializer(), price),
+            priceJson = price?.let { json.encodeToString(CardPrice.serializer(), it) }.orEmpty(),
             scannedAt = Instant.now().toEpochMilli(),
             notes = notes,
+            tcgplayerId = card.tcgplayerId,
         )
         dao.insert(entity)
+    }
+
+    /** Attach a freshly fetched price to an existing loose scan row. */
+    suspend fun setPrice(rowId: Long, price: CardPrice): Boolean = withContext(Dispatchers.IO) {
+        val existing = dao.getById(rowId) ?: return@withContext false
+        dao.update(
+            existing.copy(priceJson = json.encodeToString(CardPrice.serializer(), price)),
+        )
+        true
+    }
+
+    /** Snapshot of every loose-scan row that still has no price attached. */
+    suspend fun getPending(): List<LooseScanEntity> = withContext(Dispatchers.IO) {
+        dao.getAll().filter { it.priceJson.isBlank() }
+    }
+
+    /**
+     * Delete the most-recently-scanned loose row matching [cardId] and [variant].
+     * Returns `true` if a row was deleted, `false` if no such loose scan exists
+     * (the entry might still live inside a pack — caller's responsibility to
+     * surface that).
+     */
+    suspend fun deleteOneMatching(cardId: String, variant: Variant): Boolean = withContext(Dispatchers.IO) {
+        val target = dao.getAll()
+            .firstOrNull { it.cardId == cardId && it.variant == variant.name }
+            ?: return@withContext false
+        dao.deleteById(target.id)
+        true
+    }
+
+    /**
+     * Batch-price every pending row. Used by Quick Scan AND Collection so the
+     * same submit semantics drive both surfaces. Returns the number of rows
+     * priced, the number that failed, and the total $ value added in.
+     */
+    suspend fun submitPendingPrices(pricing: PricingRepository): SubmitResult = withContext(Dispatchers.IO) {
+        val pending = getPending()
+        if (pending.isEmpty()) return@withContext SubmitResult.Empty
+        val requests = pending.mapNotNull { row ->
+            val variant = runCatching { Variant.valueOf(row.variant) }.getOrDefault(Variant.STANDARD)
+            row.tcgplayerId?.takeIf { it.isNotBlank() }?.let { PriceRequest(it, variant) }
+        }
+        val resultMap = if (requests.isNotEmpty()) {
+            runCatching { pricing.priceMany(requests) }
+                .getOrElse { exc -> return@withContext SubmitResult.NetworkError(exc.message ?: "pricing call failed") }
+        } else {
+            emptyMap()
+        }
+
+        var priced = 0
+        var failed = 0
+        var total = 0.0
+        pending.forEach { row ->
+            val tcg = row.tcgplayerId
+            val variant = runCatching { Variant.valueOf(row.variant) }.getOrDefault(Variant.STANDARD)
+            val r = tcg?.takeIf { it.isNotBlank() }?.let { resultMap[PriceRequest(it, variant)] }
+            r?.onSuccess { price ->
+                val ok = runCatching { setPrice(row.id, price) }.getOrDefault(false)
+                if (ok) { priced += 1; total += price.marketPrice } else failed += 1
+            }?.onFailure { failed += 1 } ?: run { failed += 1 }
+        }
+        SubmitResult.Done(priced = priced, failed = failed, totalValue = total)
+    }
+
+    sealed interface SubmitResult {
+        data object Empty : SubmitResult
+        data class Done(val priced: Int, val failed: Int, val totalValue: Double) : SubmitResult
+        data class NetworkError(val reason: String) : SubmitResult
     }
 
     suspend fun deleteEntryById(id: Long): Unit = withContext(Dispatchers.IO) {
@@ -74,13 +151,20 @@ class LooseScanRepository(private val dao: LooseScanDao) {
     }
 
     private fun LooseScanEntity.toScannedEntryOrNull(): ScannedEntry? {
-        val card = CardDatabase.lookupByNumber(cardId) ?: run {
-            Log.w(TAG, "Loose scan $id references unknown card $cardId; dropping from view")
-            return null
+        val card = CardDatabase.lookupByNumber(cardId)
+            ?: CardDatabase.lookupByTcgplayerId(tcgplayerId ?: "")
+            ?: run {
+                Log.w(TAG, "Loose scan $id references unknown card $cardId; dropping from view")
+                return null
+            }
+        // Empty priceJson is the "not yet priced" sentinel. Non-empty but
+        // un-parseable is logged and treated the same way — the row still
+        // appears in Collection, just without a price.
+        val price = priceJson.takeIf { it.isNotBlank() }?.let { raw ->
+            runCatching { json.decodeFromString<CardPrice>(raw) }
+                .onFailure { Log.w(TAG, "Failed to parse priceJson for loose scan $id", it) }
+                .getOrNull()
         }
-        val price = runCatching { json.decodeFromString<CardPrice>(priceJson) }
-            .onFailure { Log.w(TAG, "Failed to parse priceJson for loose scan $id", it) }
-            .getOrNull() ?: return null
         val parsedVariant = runCatching { Variant.valueOf(variant) }.getOrDefault(Variant.STANDARD)
         return ScannedEntry(
             id = "loose-$id",

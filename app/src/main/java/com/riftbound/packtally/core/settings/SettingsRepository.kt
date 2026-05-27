@@ -23,6 +23,7 @@ data class AppSettings(
     // their cadence comfortably while reusing cached entries within a session.
     val cacheTtlHours: Int = 6,
     val forceOcrPreprocessing: Boolean = false,
+    val ocrDebugLogging: Boolean = false,
 )
 
 interface SettingsRepository {
@@ -36,6 +37,7 @@ interface SettingsRepository {
     suspend fun setConversionRate(rate: Double)
     suspend fun setCacheTtlHours(hours: Int)
     suspend fun setForceOcrPreprocessing(value: Boolean)
+    suspend fun setOcrDebugLogging(value: Boolean)
 
     /** Wipe every preference back to defaults. Part of the nuclear reset path. */
     suspend fun resetAll()

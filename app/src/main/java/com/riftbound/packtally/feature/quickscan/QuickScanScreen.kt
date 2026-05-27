@@ -1,6 +1,6 @@
 package com.riftbound.packtally.feature.quickscan
 
-import androidx.compose.foundation.background
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,13 +21,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,7 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -46,8 +45,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.core.carddb.CardDatabase
 import com.riftbound.packtally.feature.scanner.CameraScreen
-import com.riftbound.packtally.feature.scanner.Variant
 import com.riftbound.packtally.model.RiftboundCard
+import com.riftbound.packtally.model.Variant
 import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
 import kotlinx.coroutines.delay
 
@@ -60,30 +59,60 @@ fun QuickScanScreen() {
     val vm: QuickScanViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     val stats by vm.stats.collectAsStateWithLifecycle()
+    val submitState by vm.submit.collectAsStateWithLifecycle()
     val ocrFailureCount by vm.ocrFailureCount.collectAsStateWithLifecycle()
+    val rapidMode by vm.rapidMode.collectAsStateWithLifecycle()
+    val lastAdded by vm.lastAdded.collectAsStateWithLifecycle()
 
     var showManualEntry by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val formatter = LocalCurrencyFormatter.current
 
-    // Reset session stats whenever the screen leaves composition.
-    // "Session" = from when I opened Quick Scan to when I navigated away.
-    LaunchedEffect(Unit) {
-        // no-op on enter; the DisposableEffect below handles exit
+    LaunchedEffect(vm) {
+        vm.events.collect { event ->
+            val msg = when (event) {
+                is QuickScanEvent.SubmitCompleted -> {
+                    val cardsTxt = "${event.priced} card" + if (event.priced == 1) "" else "s"
+                    val tail = if (event.failed > 0) " (${event.failed} couldn't be priced)" else ""
+                    "Priced $cardsTxt — ${formatter.format(event.totalValue)}$tail"
+                }
+                is QuickScanEvent.SubmitFailed -> "Pricing failed — ${event.reason}"
+            }
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        }
     }
+
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose { vm.clearSessionStats() }
     }
 
+    val isSubmitting = submitState is QuickScanSubmitState.InFlight
+
     Box(modifier = Modifier.fillMaxSize()) {
         CameraScreen(onCardCaptured = vm::onCardCaptured)
 
-        // Session tally + Type-instead button overlaid at the top.
+        // Session tally + Submit + Type-instead overlay at the top.
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
+            RapidModeChip(
+                enabled = rapidMode,
+                onToggle = vm::setRapidMode,
+                lastAddedName = lastAdded.takeIf { rapidMode },
+            )
+            Spacer(Modifier.height(8.dp))
             SessionTallyChip(stats)
+            if (stats.pendingCount > 0) {
+                Spacer(Modifier.height(8.dp))
+                SubmitPendingButton(
+                    pendingCount = stats.pendingCount,
+                    isSubmitting = isSubmitting,
+                    onSubmit = vm::submitPending,
+                )
+            }
             if (ocrFailureCount >= MANUAL_ENTRY_SUGGEST_AFTER || state is QuickScanState.Failed) {
                 Spacer(Modifier.height(8.dp))
                 TypeInsteadButton(onClick = { showManualEntry = true })
@@ -106,11 +135,9 @@ fun QuickScanScreen() {
                         onPick = vm::pickCandidate,
                         onRescan = vm::reset,
                     )
-                    is QuickScanState.Pricing -> PricingContent(s.card, s.variant)
                     is QuickScanState.Saved -> SavedContent(
                         card = s.card,
                         variant = s.variant,
-                        marketPrice = s.marketPrice,
                         onScanAnother = vm::scanAnother,
                         onDone = vm::reset,
                     )
@@ -137,9 +164,83 @@ fun QuickScanScreen() {
 }
 
 @Composable
+private fun RapidModeChip(
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    lastAddedName: String?,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (enabled) {
+            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.95f)
+        } else {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+        },
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 2.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (enabled) "Rapid mode ON — auto-adds as Standard" else "Rapid mode",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                val sub = if (enabled) {
+                    lastAddedName?.let { "Last: $it" }
+                        ?: "Skip the variant chooser; tap card → done"
+                } else {
+                    "Switch on to bulk-scan without confirming variants"
+                }
+                Text(
+                    sub,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = onToggle)
+        }
+    }
+}
+
+@Composable
+private fun SubmitPendingButton(
+    pendingCount: Int,
+    isSubmitting: Boolean,
+    onSubmit: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 4.dp,
+    ) {
+        Button(
+            onClick = onSubmit,
+            enabled = !isSubmitting,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (isSubmitting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Fetching prices…")
+            } else {
+                Text("Submit $pendingCount card${if (pendingCount == 1) "" else "s"} for pricing")
+            }
+        }
+    }
+}
+
+@Composable
 private fun SessionTallyChip(stats: SessionStats) {
     val cards = stats.cardsAdded
-    val total = stats.totalValue
     if (cards == 0) return
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -151,14 +252,22 @@ private fun SessionTallyChip(stats: SessionStats) {
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val label = "$cards " + (if (cards == 1) "card" else "cards") + " added"
+            val cardsLabel = "$cards " + (if (cards == 1) "card" else "cards") + " added"
+            val subline = if (stats.pendingCount > 0) {
+                "${stats.pendingCount} pending price"
+            } else null
+            Column(modifier = Modifier.weight(1f)) {
+                Text(cardsLabel, style = MaterialTheme.typography.bodyMedium)
+                if (subline != null) {
+                    Text(
+                        subline,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             Text(
-                label,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                LocalCurrencyFormatter.current.format(total),
+                LocalCurrencyFormatter.current.format(stats.totalValue),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -262,38 +371,12 @@ private fun AmbiguousContent(
 }
 
 @Composable
-private fun PricingContent(card: RiftboundCard, variant: Variant) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-    ) {
-        Text(card.name, style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "${card.setCode}-${card.collectorNumber}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(20.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(12.dp))
-            Text("Fetching ${variant.name.lowercase()} price…")
-        }
-        Spacer(Modifier.height(16.dp))
-    }
-}
-
-@Composable
 private fun SavedContent(
     card: RiftboundCard,
     variant: Variant,
-    marketPrice: Double,
     onScanAnother: () -> Unit,
     onDone: () -> Unit,
 ) {
-    val formatter = LocalCurrencyFormatter.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -318,9 +401,9 @@ private fun SavedContent(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    formatter.format(marketPrice),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
+                    "Price pending — tap Submit to fetch with the rest of the batch.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

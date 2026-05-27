@@ -104,6 +104,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { settingsRepository.setForceOcrPreprocessing(value) }
     }
 
+    fun setOcrDebugLogging(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setOcrDebugLogging(value) }
+    }
+
     fun clearCache() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { cachedPricing.clearCache() }

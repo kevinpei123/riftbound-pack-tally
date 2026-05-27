@@ -27,19 +27,23 @@ class PackSession(
     val entries: StateFlow<List<ScannedEntry>> = _entries.asStateFlow()
 
     private val _runningTotal = MutableStateFlow(
-        initialEntries.sumOf { it.price.marketPrice },
+        initialEntries.sumOf { it.marketPrice },
     )
     val runningTotal: StateFlow<Double> = _runningTotal.asStateFlow()
 
     val size: Int get() = _entries.value.size
     val isFull: Boolean get() = size >= CAPACITY
 
+    /** Count of entries in this pack that don't yet have a price attached. */
+    val pendingPriceCount: Int get() = _entries.value.count { !it.isPriced }
+    val hasPendingPrices: Boolean get() = pendingPriceCount > 0
+
     /** Append an entry. Returns false (no-op) if the pack is already full. */
     fun addEntry(entry: ScannedEntry): Boolean {
         if (isFull) return false
         val updated = _entries.value + entry
         _entries.value = updated
-        _runningTotal.value = updated.sumOf { it.price.marketPrice }
+        _runningTotal.value = updated.sumOf { it.marketPrice }
         return true
     }
 
@@ -49,7 +53,7 @@ class PackSession(
         val updated = current.filterNot { it.id == entryId }
         if (updated.size == current.size) return false
         _entries.value = updated
-        _runningTotal.value = updated.sumOf { it.price.marketPrice }
+        _runningTotal.value = updated.sumOf { it.marketPrice }
         return true
     }
 
@@ -60,7 +64,7 @@ class PackSession(
         if (index < 0) return false
         val updated = current.toMutableList().apply { set(index, newEntry) }
         _entries.value = updated
-        _runningTotal.value = updated.sumOf { it.price.marketPrice }
+        _runningTotal.value = updated.sumOf { it.marketPrice }
         return true
     }
 

@@ -1,3 +1,21 @@
 
 # Riftcodex sync writes to Room, not assets. Don't commit any local card snapshots.
 app/src/main/assets/cards.json
+
+# Android / Gradle build output.
+.gradle/
+build/
+app/build/
+
+# Local machine configuration.
+local.properties
+.idea/caches/
+.idea/libraries/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/dictionaries/
+
+# OS noise.
+.DS_Store
+Thumbs.db

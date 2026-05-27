@@ -1,7 +1,7 @@
 package com.riftbound.packtally.core.pricing
 
 import com.riftbound.packtally.core.settings.SettingsRepository
-import com.riftbound.packtally.feature.scanner.Variant
+import com.riftbound.packtally.model.Variant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -26,11 +26,16 @@ import retrofit2.http.POST
  * Free tier batch limit: 20 items per POST. Caller (JustTcgPricingRepository)
  * splits larger batches.
  */
+interface JustTcgApiClient {
+    suspend fun postCards(items: List<JustTcgRequestItem>): JustTcgBatchResponse
+    fun filterFor(variant: Variant): VariantFilter
+}
+
 class JustTcgClient(
     private val settings: SettingsRepository,
     baseUrl: String = DEFAULT_BASE_URL,
     okHttpClient: OkHttpClient = defaultOkHttpClient(),
-) {
+) : JustTcgApiClient {
     private val api: JustTcgApi = Retrofit.Builder()
         .baseUrl(baseUrl)
         .client(okHttpClient)
@@ -38,7 +43,7 @@ class JustTcgClient(
         .build()
         .create(JustTcgApi::class.java)
 
-    suspend fun postCards(items: List<JustTcgRequestItem>): JustTcgBatchResponse {
+    override suspend fun postCards(items: List<JustTcgRequestItem>): JustTcgBatchResponse {
         require(items.size <= MAX_BATCH) {
             "JustTCG free tier accepts at most $MAX_BATCH items per POST; got ${items.size}"
         }
@@ -48,7 +53,7 @@ class JustTcgClient(
     }
 
     /** Variant → JustTCG (printing, condition) per the documented variant mapping. */
-    fun filterFor(variant: Variant): VariantFilter = when (variant) {
+    override fun filterFor(variant: Variant): VariantFilter = when (variant) {
         // Signature reads as Foil because JustTCG doesn't have a separate
         // "Signature" printing key. Riftbound signature cards are numbered +
         // signed foils; the foil market price is a fair lower bound. Premium

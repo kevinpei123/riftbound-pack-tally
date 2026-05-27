@@ -23,10 +23,16 @@ import retrofit2.http.Query
  *
  * Pagination: max size=100, walk page=1..N until response has < size items.
  */
+interface RiftcodexCardSource {
+    suspend fun fetchAllCards(): List<RiftcodexCardDto>
+    suspend fun lookupByRiftboundId(id: String): RiftcodexCardDto?
+    suspend fun lookupByTcgplayerId(tcgplayerId: String): RiftcodexCardDto?
+}
+
 class RiftcodexClient(
     baseUrl: String = DEFAULT_BASE_URL,
     okHttpClient: OkHttpClient = defaultOkHttpClient(),
-) {
+) : RiftcodexCardSource {
     private val api: RiftcodexApi = Retrofit.Builder()
         .baseUrl(baseUrl)
         .client(okHttpClient)
@@ -35,12 +41,12 @@ class RiftcodexClient(
         .create(RiftcodexApi::class.java)
 
     /** Walks every page (size=[PAGE_SIZE]) until exhausted. Returns the flattened card list. */
-    suspend fun fetchAllCards(): List<RiftcodexCardDto> {
+    override suspend fun fetchAllCards(): List<RiftcodexCardDto> {
         val out = mutableListOf<RiftcodexCardDto>()
         var page = 1
         while (true) {
             val resp = api.listCards(size = PAGE_SIZE, page = page)
-            val items = resp.data ?: resp.cards ?: emptyList()
+            val items = resp.cardsFromKnownEnvelope()
             out.addAll(items)
             if (items.size < PAGE_SIZE) break
             page += 1
@@ -52,10 +58,10 @@ class RiftcodexClient(
         return out
     }
 
-    suspend fun lookupByRiftboundId(id: String): RiftcodexCardDto? =
+    override suspend fun lookupByRiftboundId(id: String): RiftcodexCardDto? =
         runCatching { api.lookupByRiftboundId(id) }.getOrNull()
 
-    suspend fun lookupByTcgplayerId(tcgplayerId: String): RiftcodexCardDto? =
+    override suspend fun lookupByTcgplayerId(tcgplayerId: String): RiftcodexCardDto? =
         runCatching { api.lookupByTcgplayerId(tcgplayerId) }.getOrNull()
 
     private companion object {
@@ -92,13 +98,19 @@ private interface RiftcodexApi {
 
 @Serializable
 data class RiftcodexListResponse(
-    // Riftcodex's list endpoint shape isn't documented precisely; support
-    // both `data` and `cards` envelopes so this works regardless.
+    // The live envelope is `items`; `data` / `cards` are tolerated as fallbacks
+    // for older API revisions.
+    val items: List<RiftcodexCardDto>? = null,
     val data: List<RiftcodexCardDto>? = null,
     val cards: List<RiftcodexCardDto>? = null,
     val total: Int? = null,
     val page: Int? = null,
-)
+    val pages: Int? = null,
+    val size: Int? = null,
+) {
+    fun cardsFromKnownEnvelope(): List<RiftcodexCardDto> =
+        items ?: data ?: cards ?: emptyList()
+}
 
 @Serializable
 data class RiftcodexCardDto(
@@ -141,6 +153,7 @@ data class RiftcodexText(
 
 @Serializable
 data class RiftcodexSet(
+    val id: String? = null,
     @SerialName("set_id") val setId: String? = null,
     val label: String? = null,
 )

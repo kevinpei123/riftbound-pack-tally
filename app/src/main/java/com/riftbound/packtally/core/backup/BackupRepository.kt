@@ -24,6 +24,7 @@ private const val MANIFEST_FILE = "manifest.json"
 private const val PREFS_FILE = "prefs.json"
 private const val DB_ZIP_ENTRY = "database.db"
 private const val CACHE_ZIP_PREFIX = "cache/"
+private const val PRICE_CACHE_DIR = "prices_v2"
 private const val APP_VERSION_STAMP = "0.1.0"  // stable string until BuildConfig.VERSION_NAME is wired
 
 @Serializable
@@ -41,6 +42,7 @@ data class BackupPrefsExport(
     @SerialName("usd_to_target_rate") val usdToTargetRate: Double,
     @SerialName("cache_ttl_hours") val cacheTtlHours: Int,
     @SerialName("force_ocr_preprocessing") val forceOcrPreprocessing: Boolean,
+    @SerialName("ocr_debug_logging") val ocrDebugLogging: Boolean,
     // API key DELIBERATELY EXCLUDED — backups must be safe to share.
 )
 
@@ -113,7 +115,7 @@ class BackupRepository(
             zip.closeEntry()
 
             // Cache dir (recursive)
-            val cacheRoot = File(context.cacheDir, "prices")
+            val cacheRoot = File(context.cacheDir, PRICE_CACHE_DIR)
             if (cacheRoot.isDirectory) {
                 cacheRoot.walkTopDown().filter { it.isFile }.forEach { f ->
                     val entryName = CACHE_ZIP_PREFIX + f.relativeTo(cacheRoot).path
@@ -255,9 +257,10 @@ class BackupRepository(
     private fun AppSettings.toBackupExport(): BackupPrefsExport = BackupPrefsExport(
         currency = currency.name,
         usdToTargetRate = usdToTargetRate,
-        cacheTtlHours = cacheTtlHours,
-        forceOcrPreprocessing = forceOcrPreprocessing,
-    )
+    cacheTtlHours = cacheTtlHours,
+    forceOcrPreprocessing = forceOcrPreprocessing,
+    ocrDebugLogging = ocrDebugLogging,
+)
 
     companion object {
         const val MANUAL_BACKUP_SUBDIR = "backups"

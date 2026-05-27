@@ -164,15 +164,128 @@ class CardOcrParserTest {
     }
 
     @Test
-    fun `number with extra whitespace inside the dash does NOT match (regex requires no spaces)`() {
-        // Documents existing behavior — the regex is strict on whitespace
-        // around the hyphen. If we ever want fuzzier matching, fix here.
+    fun `whitespace around the separator still matches`() {
+        // The printed format uses a space, and OCR routinely inserts extra
+        // padding around it. The parser must tolerate this.
         val blocks = listOf(
             block("Card", top = 40, height = 50),
             block("OGN - 001", top = 900, height = 22),
         )
         val result = CardOcrParser.parse(blocks)
-        assertNull(result.collectorNumber)
+        assertEquals("OGN-001", result.collectorNumber)
+        assertEquals("OGN", result.setCode)
+    }
+
+    @Test
+    fun `printed Riftbound format with space separator parses to canonical hyphenated form`() {
+        // What's actually printed on every retail Riftbound card.
+        val blocks = listOf(
+            block("Card Name", top = 40, height = 50),
+            block("UNL 156/219", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("UNL-156/219", result.collectorNumber)
+        assertEquals("UNL", result.setCode)
+    }
+
+    @Test
+    fun `OCR misreading the kerned space as a period still parses`() {
+        // ML Kit Latin frequently reads the thin space between set code and
+        // collector number as a period — user-reported as "UNL . 156/219".
+        val blocks = listOf(
+            block("Card Name", top = 40, height = 50),
+            block("UNL . 156/219", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("UNL-156/219", result.collectorNumber)
+        assertEquals("UNL", result.setCode)
+    }
+
+    @Test
+    fun `OCR collapsing the separator entirely still parses`() {
+        val blocks = listOf(
+            block("Card Name", top = 40, height = 50),
+            block("UNL156/219", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("UNL-156/219", result.collectorNumber)
+        assertEquals("UNL", result.setCode)
+    }
+
+    @Test
+    fun `middle-dot and bullet variants are absorbed by the separator class`() {
+        val blocks = listOf(
+            block("Card", top = 40, height = 50),
+            block("UNL · 053/219", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("UNL-053/219", result.collectorNumber)
+
+        val blocks2 = listOf(
+            block("Card", top = 40, height = 50),
+            block("UNL • 053/219", top = 900, height = 22),
+        )
+        val result2 = CardOcrParser.parse(blocks2)
+        assertEquals("UNL-053/219", result2.collectorNumber)
+    }
+
+    @Test
+    fun `alternate art lowercase letter suffix is preserved in output`() {
+        // Alt-art prints add a lowercase letter to the numerator. The card
+        // database keys off SET-NUMletter for alt-art rows, so preserving the
+        // suffix lets lookupByNumber hit the exact variant when OCR sees it.
+        val blocks = listOf(
+            block("Card Name", top = 40, height = 50),
+            block("OGN 120a/298", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("OGN-120a/298", result.collectorNumber)
+        assertEquals("OGN", result.setCode)
+    }
+
+    @Test
+    fun `signature asterisk suffix is stripped from output`() {
+        // Signature overnumbers print with a star ("OGN 308*/298"); the
+        // signature/standard/foil distinction is handled by the variant chooser
+        // after identification, not by a separate database row.
+        val blocks = listOf(
+            block("Card Name", top = 40, height = 50),
+            block("OGN 308*/298", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("OGN-308/298", result.collectorNumber)
+        assertEquals("OGN", result.setCode)
+    }
+
+    @Test
+    fun `overnumber chase card preserves the numerator above the denominator`() {
+        // Some chase cards are numbered past the set total ("OGN 299/298").
+        val blocks = listOf(
+            block("Chase Card", top = 40, height = 50),
+            block("OGN 299/298", top = 900, height = 22),
+        )
+        val result = CardOcrParser.parse(blocks)
+        assertEquals("OGN-299/298", result.collectorNumber)
+        assertEquals("OGN", result.setCode)
+    }
+
+    @Test
+    fun `new set codes ARC and FND are recognized as known`() {
+        // Expanding KNOWN_SETS beyond OGN/UNL/SFD/OGS — verify both win Pass 1
+        // against unrelated body text.
+        val arcBlocks = listOf(
+            block("Card", top = 40, height = 50),
+            block("FOO-1 nonsense", top = 300, height = 22),
+            block("ARC 003/006", top = 900, height = 22),
+        )
+        assertEquals("ARC-003/006", CardOcrParser.parse(arcBlocks).collectorNumber)
+
+        val fndBlocks = listOf(
+            block("Card", top = 40, height = 50),
+            block("BAR-9 nonsense", top = 300, height = 22),
+            block("FND 087/298", top = 900, height = 22),
+        )
+        assertEquals("FND-087/298", CardOcrParser.parse(fndBlocks).collectorNumber)
     }
 
     @Test
@@ -211,19 +324,19 @@ class CardOcrParserTest {
     @Test
     fun `confidence proxy at length 1 is 005`() {
         val b = block(text = "x", top = 0, height = 10)
-        kotlin.test.assertEquals(0.05f, b.confidence, 0.0001f)
+        assertEquals(0.05f, b.confidence, 0.0001f)
     }
 
     @Test
     fun `confidence proxy at length 19 is 095 cap`() {
         val b = block(text = "x".repeat(19), top = 0, height = 10)
-        kotlin.test.assertEquals(0.95f, b.confidence, 0.0001f)
+        assertEquals(0.95f, b.confidence, 0.0001f)
     }
 
     @Test
     fun `confidence proxy at length 50 still capped at 095`() {
         val b = block(text = "x".repeat(50), top = 0, height = 10)
-        kotlin.test.assertEquals(0.95f, b.confidence, 0.0001f)
+        assertEquals(0.95f, b.confidence, 0.0001f)
     }
 
     @Test
@@ -239,6 +352,31 @@ class CardOcrParserTest {
         val result = CardOcrParser.parse(blocks)
         assertEquals("Brazen Buccaneer", result.name)
         assertEquals("OGN-002/298", result.collectorNumber)
+    }
+
+    @Test
+    fun `hyphen underscore and mixed case separators parse`() {
+        assertEquals(
+            "UNL-181/219",
+            CardOcrParser.parse(
+                listOf(block("Card", top = 40, height = 50), block("unl-181/219", top = 900, height = 22)),
+            ).collectorNumber,
+        )
+        assertEquals(
+            "OGN-181/298",
+            CardOcrParser.parse(
+                listOf(block("Card", top = 40, height = 50), block("oGn_181/298", top = 900, height = 22)),
+            ).collectorNumber,
+        )
+    }
+
+    @Test
+    fun `future two to four letter set fallback parses`() {
+        val two = listOf(block("Card", top = 40, height = 50), block("NX 007/100", top = 900, height = 22))
+        val four = listOf(block("Card", top = 40, height = 50), block("ABCD 007/100", top = 900, height = 22))
+
+        assertEquals("NX-007/100", CardOcrParser.parse(two).collectorNumber)
+        assertEquals("ABCD-007/100", CardOcrParser.parse(four).collectorNumber)
     }
 
     private fun block(

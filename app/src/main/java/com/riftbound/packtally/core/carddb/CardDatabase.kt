@@ -28,8 +28,14 @@ object CardDatabase {
 
     /** Load the catalogue from Room. Idempotent — repeats refresh the in-memory maps. */
     suspend fun initFromRoom(cardDao: CardDao) = withContext(Dispatchers.IO) {
-        val entities = cardDao.getAll()
-        val loaded = entities.map { it.toRiftboundCard() }
+        replaceCards(cardDao.getAll().map { it.toRiftboundCard() })
+    }
+
+    internal fun initForTests(testCards: List<RiftboundCard>) {
+        replaceCards(testCards)
+    }
+
+    private fun replaceCards(loaded: List<RiftboundCard>) {
         cards = loaded
         byId = loaded.associateBy { it.id.lowercase() }
         byTcgplayerId = loaded.associateBy { it.tcgplayerId }
@@ -39,6 +45,9 @@ object CardDatabase {
     }
 
     fun isReady(): Boolean = initialized
+
+    /** Number of cards currently loaded. Used by MainActivity to detect a successful sync that nevertheless ended up with an empty table (schema drift, etc.). */
+    val size: Int get() = cards.size
 
     /**
      * Accepts the printed collector code in several forms:
@@ -56,21 +65,19 @@ object CardDatabase {
 
         SET_NUM.matchEntire(core)?.let { match ->
             val (set, num) = match.destructured
-            val trimmed = num.trimStart('0').ifEmpty { "0" }
-            bySetCodeAndNumber[setNumKey(set, trimmed)]?.let { return it }
-            // Also try the original Riftbound id format (e.g. OGN-011 with leading zero)
             bySetCodeAndNumber[setNumKey(set, num)]?.let { return it }
-            // Riftcodex stores `riftbound_id` like "OGN-011" — try the dash form
-            // directly against byId in case the collectorNumber is the full string.
-            cards.firstOrNull {
-                it.setCode.equals(set, ignoreCase = true) &&
-                    it.collectorNumber.equals("${set.uppercase()}-$num", ignoreCase = true)
-            }?.let { return it }
+            // If OCR missed the alternate-art suffix, fall back to the base
+            // number only when that resolves to a single card. Exact suffix
+            // matches above always win.
+            val baseKey = setNumKey(set, num.takeWhile { it.isDigit() })
+            cards.filter { setNumKey(it.setCode, it.collectorNumber).removeSuffixLetter() == baseKey }
+                .singleOrNull()
+                ?.let { return it }
         }
 
         BARE_NUM.matchEntire(core)?.let { match ->
-            val num = match.groupValues[1].trimStart('0').ifEmpty { "0" }
-            return cards.filter { it.collectorNumber == num }.singleOrNull()
+            val num = normalizeNumberPart(match.groupValues[1])
+            return cards.filter { normalizeNumberPart(it.collectorNumber) == num }.singleOrNull()
         }
 
         return null
@@ -81,20 +88,57 @@ object CardDatabase {
 
     fun lookupByNameFuzzy(query: String, limit: Int = 3): List<RiftboundCard> {
         if (!initialized || query.isBlank() || limit <= 0) return emptyList()
-        val q = query.trim().lowercase()
+        val q = normalizeNameForLookup(query)
         return cards
             .asSequence()
-            .map { it to levenshtein(q, it.name.lowercase()) }
-            .sortedBy { it.second }
+            .map { card ->
+                val name = normalizeNameForLookup(card.name)
+                val distance = when {
+                    name == q -> 0
+                    name.contains(q) -> 1
+                    else -> levenshtein(q, name)
+                }
+                card to distance
+            }
+            .filter { (_, distance) ->
+                distance <= maxOf(2, (q.length * 0.42f).toInt())
+            }
+            .sortedWith(compareBy<Pair<RiftboundCard, Int>> { it.second }.thenBy { it.first.name })
             .take(limit)
             .map { it.first }
             .toList()
     }
 
     private fun setNumKey(setCode: String, collectorNumber: String): String =
-        "${setCode.uppercase()}-$collectorNumber"
+        "${setCode.uppercase()}-${normalizeNumberPart(collectorNumber)}"
 
-    private val SET_NUM = Regex("""^([A-Za-z]{2,4})-(\d+)$""")
+    private fun normalizeNumberPart(input: String): String {
+        val raw = input.trim()
+            .substringBefore('/')
+            .substringAfter('-')
+        val match = Regex("""^0*(\d+)([A-Za-z]?)$""").matchEntire(raw)
+            ?: return raw.lowercase()
+        val number = match.groupValues[1].ifEmpty { "0" }
+        val suffix = match.groupValues[2].lowercase()
+        return number + suffix
+    }
+
+    private fun String.removeSuffixLetter(): String =
+        replace(Regex("""[a-z]$"""), "")
+
+    private fun normalizeNameForLookup(input: String): String =
+        input.lowercase()
+            .replace('0', 'o')
+            .replace('1', 'i')
+            .replace('!', 'i')
+            .replace('3', 'e')
+            .replace('5', 's')
+            .replace('8', 'b')
+            .replace(Regex("""[^a-z0-9]+"""), " ")
+            .trim()
+            .replace(Regex("""\s+"""), " ")
+
+    private val SET_NUM = Regex("""^([A-Za-z]{2,4})-(\d+[A-Za-z]?)$""")
     private val BARE_NUM = Regex("""^(\d+)$""")
 }
 

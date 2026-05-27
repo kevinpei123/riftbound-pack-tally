@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.riftbound.packtally.BuildConfig
 import com.riftbound.packtally.core.settings.AppSettings
 import com.riftbound.packtally.core.pricing.QuotaState
 import com.riftbound.packtally.core.settings.Currency
@@ -122,6 +124,13 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
             enabled = settings.forceOcrPreprocessing,
             onChange = vm::setForceOcrPreprocessing,
         )
+
+        if (BuildConfig.DEBUG) {
+            OcrDebugLoggingSection(
+                enabled = settings.ocrDebugLogging,
+                onChange = vm::setOcrDebugLogging,
+            )
+        }
 
         ClearCacheRow(
             cacheSizeBytes = cacheSize,
@@ -264,7 +273,7 @@ private fun CacheTtlSection(
             steps = 22,
         )
         Text(
-            "Prices cached longer than this expire and refetch from tcgapi.dev.",
+            "Prices cached longer than this expire and refetch from JustTCG.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -304,14 +313,14 @@ private fun CardDatabaseSection(
                         modifier = Modifier.height(16.dp),
                         strokeWidth = 2.dp,
                     )
-                    Spacer(Modifier.height(0.dp).padding(start = 8.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text("Re-syncing…")
                 } else {
                     Text("Re-sync from Riftcodex")
                 }
             }
             Text(
-                "Riftcodex auto-resyncs weekly in the background.",
+                "Use this before box day or when a newly released set is missing.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -444,6 +453,29 @@ private fun OcrPreprocessingSection(
                 "Always apply grayscale + 1.5× contrast before scanning. Helps " +
                     "with foil / signature glare. Otsu binarization still kicks in " +
                     "automatically when a scan returns low-confidence blocks.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = enabled, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+private fun OcrDebugLoggingSection(
+    enabled: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            SectionLabel("OCR debug logging")
+            Text(
+                "Debug builds only. Logs raw OCR text, parsed collector candidate, " +
+                    "confidence path, and lookup method to logcat.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

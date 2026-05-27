@@ -108,6 +108,15 @@ class BoxSession(
         _grandTotal.value = _packs.value.sumOf { it.runningTotal.value }
     }
 
+    /**
+     * Force a grand-total refresh. The pack-internal mutations (replaceEntry on
+     * a PackSession we hand out) don't reach back into BoxSession, so a batch
+     * pricing patch needs to call this explicitly to keep [grandTotal] correct.
+     */
+    fun recomputeGrandTotalPublic() {
+        recomputeGrandTotal()
+    }
+
     companion object {
         const val BOX_CAPACITY = 24
     }

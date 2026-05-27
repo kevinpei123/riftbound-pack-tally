@@ -8,15 +8,15 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.riftbound.packtally.App
+import com.riftbound.packtally.BuildConfig
 import com.riftbound.packtally.core.carddb.CardDatabase
 import com.riftbound.packtally.core.ocr.CardOcrParser
 import com.riftbound.packtally.core.ocr.OcrService
-import com.riftbound.packtally.core.pricing.PricingRepository
 import com.riftbound.packtally.core.settings.SettingsRepository
 import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.ScannedEntry
-import kotlinx.coroutines.TimeoutCancellationException
+import com.riftbound.packtally.model.Variant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,9 +31,8 @@ private const val CONFIDENCE_UNKNOWN_SET = 0.6f
 private const val CONFIDENCE_NAME_FALLBACK = 0.5f
 
 private const val OCR_TIMEOUT_MS = 10_000L
-private const val PRICING_TIMEOUT_MS = 30_000L
 
-private val KNOWN_SETS = setOf("OGN", "UNL", "SFD", "OGS")
+private val KNOWN_SETS = setOf("OGN", "OGS", "ARC", "SFD", "UNL", "FND")
 
 sealed interface ScanResult {
     data object Idle : ScanResult
@@ -41,19 +40,9 @@ sealed interface ScanResult {
     data class Identified(val card: RiftboundCard, val confidence: Float) : ScanResult
     data class Ambiguous(val candidates: List<RiftboundCard>) : ScanResult
     data class Failed(val reason: String) : ScanResult
-    data class Pricing(val card: RiftboundCard, val variant: Variant) : ScanResult
-    data class PricingFailed(
-        val card: RiftboundCard,
-        val variant: Variant,
-        val reason: String,
-    ) : ScanResult
 }
 
-@kotlinx.serialization.Serializable
-enum class Variant { STANDARD, FOIL, SIGNATURE }
-
 class ScannerViewModel(
-    private val pricing: PricingRepository,
     private val pack: PackViewModel,
     private val settings: SettingsRepository,
 ) : ViewModel() {
@@ -65,56 +54,33 @@ class ScannerViewModel(
         if (_scanResult.value is ScanResult.Scanning) return
         _scanResult.value = ScanResult.Scanning
         viewModelScope.launch {
-            _scanResult.value = identify(bitmap)
+            _scanResult.value = try {
+                identify(bitmap)
+            } finally {
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
         }
     }
 
+    /**
+     * Append the identified card to the active pack with no price attached.
+     * The PackViewModel's Submit action prices the whole pack in one batched
+     * JustTCG call when the user is done filling it. Per-scan pricing would
+     * burn the free-tier quota (~1000 requests/month) very fast.
+     */
     fun recordCard(card: RiftboundCard, variant: Variant) {
         val confidence = (_scanResult.value as? ScanResult.Identified)?.confidence
             ?: CONFIDENCE_NAME_FALLBACK
-        _scanResult.value = ScanResult.Pricing(card, variant)
-        viewModelScope.launch {
-            val result = runCatching {
-                withTimeout(PRICING_TIMEOUT_MS) {
-                    pricing.price(card, variant)
-                }
-            }.getOrElse { exc ->
-                Log.e(TAG, "Pricing timed out / threw for ${card.id} as $variant", exc)
-                val reason = if (exc is TimeoutCancellationException) {
-                    "Pricing timed out after ${PRICING_TIMEOUT_MS / 1000}s"
-                } else exc.message ?: "Pricing failed"
-                _scanResult.value = ScanResult.PricingFailed(card, variant, reason)
-                return@launch
-            }
-            result
-                .onSuccess { price ->
-                    pack.append(
-                        ScannedEntry(
-                            card = card,
-                            variant = variant,
-                            price = price,
-                            confidence = confidence,
-                            scannedAt = Instant.now(),
-                        ),
-                    )
-                    reset()
-                }
-                .onFailure { exc ->
-                    Log.e(TAG, "Pricing failed for ${card.id} as $variant", exc)
-                    _scanResult.value = ScanResult.PricingFailed(
-                        card = card,
-                        variant = variant,
-                        reason = exc.message ?: "Pricing failed",
-                    )
-                }
-        }
-    }
-
-    fun retryPricing() {
-        val current = _scanResult.value
-        if (current is ScanResult.PricingFailed) {
-            recordCard(current.card, current.variant)
-        }
+        pack.append(
+            ScannedEntry(
+                card = card,
+                variant = variant,
+                price = null,
+                confidence = confidence,
+                scannedAt = Instant.now(),
+            ),
+        )
+        reset()
     }
 
     fun pickCandidate(card: RiftboundCard) {
@@ -127,13 +93,21 @@ class ScannerViewModel(
 
     private suspend fun identify(bitmap: Bitmap): ScanResult {
         return try {
-            val alwaysPreprocess = settings.getCurrentSettings().forceOcrPreprocessing
+            val currentSettings = settings.getCurrentSettings()
+            val alwaysPreprocess = currentSettings.forceOcrPreprocessing
             // OCR call wrapped in withTimeout(10s) so a stuck ML Kit call
             // can't hang the scan flow indefinitely.
             val blocks = withTimeout(OCR_TIMEOUT_MS) {
                 OcrService.recognize(bitmap, alwaysPreprocess = alwaysPreprocess)
             }
             val parsed = CardOcrParser.parse(blocks)
+            val debugLogging = BuildConfig.DEBUG && currentSettings.ocrDebugLogging
+            if (debugLogging) {
+                Log.d(
+                    TAG,
+                    "OCR raw='${blocks.joinToString(" | ") { it.text }}' parsed=$parsed",
+                )
+            }
 
             parsed.collectorNumber?.let { number ->
                 CardDatabase.lookupByNumber(number)?.let { card ->
@@ -142,12 +116,14 @@ class ScannerViewModel(
                     } else {
                         CONFIDENCE_UNKNOWN_SET
                     }
+                    if (debugLogging) Log.d(TAG, "OCR lookup=collector confidence=$confidence card=${card.id}")
                     return ScanResult.Identified(card, confidence)
                 }
             }
 
             parsed.name?.let { name ->
                 val candidates = CardDatabase.lookupByNameFuzzy(name, limit = 3)
+                if (debugLogging) Log.d(TAG, "OCR lookup=name candidates=${candidates.map { it.id }}")
                 return when (candidates.size) {
                     0 -> ScanResult.Failed("No match for '$name'")
                     1 -> ScanResult.Identified(candidates.first(), CONFIDENCE_NAME_FALLBACK)
@@ -166,7 +142,6 @@ class ScannerViewModel(
         fun factory(app: App, pack: PackViewModel): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 ScannerViewModel(
-                    pricing = app.pricing,
                     pack = pack,
                     settings = app.settingsRepository,
                 )

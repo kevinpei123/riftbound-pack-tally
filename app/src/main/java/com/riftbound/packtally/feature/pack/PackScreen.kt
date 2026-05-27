@@ -1,5 +1,6 @@
 package com.riftbound.packtally.feature.pack
 
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
@@ -13,16 +14,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.stickyHeader
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +34,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +58,7 @@ fun PackScreen(onNavigateToScanner: () -> Unit) {
     val packs by box.packs.collectAsStateWithLifecycle()
     val grandTotal by box.grandTotal.collectAsStateWithLifecycle()
     val correction by packVm.correction.collectAsStateWithLifecycle()
+    val submitState by packVm.submit.collectAsStateWithLifecycle()
     val activePack = packs.lastOrNull()
 
     val entries: List<ScannedEntry>
@@ -65,8 +71,32 @@ fun PackScreen(onNavigateToScanner: () -> Unit) {
         runningTotal = 0.0
     }
 
+    val pendingCount = entries.count { !it.isPriced }
     val packIsFull = activePack?.isFull == true
     val canStartNextPack = packs.size < box.capacity
+    val isSubmitting = submitState is SubmitState.InFlight
+
+    val context = LocalContext.current
+    val formatter = LocalCurrencyFormatter.current
+
+    // Reload from disk on every entry to this tab so edits made elsewhere
+    // (e.g. Collection's cross-pack remove of an entry from a previously-
+    // completed pack) show up here without the user having to relaunch.
+    LaunchedEffect(Unit) { packVm.refreshFromDisk() }
+
+    LaunchedEffect(packVm) {
+        packVm.events.collect { event ->
+            val msg = when (event) {
+                is PackEvent.SubmitCompleted -> {
+                    val cardsTxt = "${event.priced} card" + if (event.priced == 1) "" else "s"
+                    val tail = if (event.failed > 0) " (${event.failed} couldn't be priced)" else ""
+                    "Priced $cardsTxt — ${formatter.format(event.packTotal)}$tail"
+                }
+                is PackEvent.SubmitFailed -> "Pricing failed — ${event.reason}"
+            }
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        }
+    }
 
     Scaffold(
         floatingActionButton = {
@@ -86,15 +116,18 @@ fun PackScreen(onNavigateToScanner: () -> Unit) {
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            stickyHeader {
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 PackHeader(
                     packNumber = packs.size.coerceAtLeast(1),
                     boxCapacity = box.capacity,
                     filledCount = entries.size,
+                    pendingCount = pendingCount,
                     runningTotal = runningTotal,
                     grandTotal = grandTotal,
-                    showCompleteButton = packIsFull,
-                    completeButtonLabel = if (canStartNextPack) "Complete pack →" else "Finish",
+                    packIsFull = packIsFull,
+                    canStartNextPack = canStartNextPack,
+                    isSubmitting = isSubmitting,
+                    onSubmitPack = packVm::submitPack,
                     onCompletePack = packVm::completePack,
                 )
             }
@@ -130,10 +163,13 @@ private fun PackHeader(
     packNumber: Int,
     boxCapacity: Int,
     filledCount: Int,
+    pendingCount: Int,
     runningTotal: Double,
     grandTotal: Double,
-    showCompleteButton: Boolean,
-    completeButtonLabel: String,
+    packIsFull: Boolean,
+    canStartNextPack: Boolean,
+    isSubmitting: Boolean,
+    onSubmitPack: () -> Unit,
     onCompletePack: () -> Unit,
 ) {
     Surface(
@@ -154,8 +190,12 @@ private fun PackHeader(
                         text = if (boxCapacity == 1) "Single pack" else "Pack $packNumber / $boxCapacity",
                         style = MaterialTheme.typography.titleMedium,
                     )
+                    val subtitle = buildString {
+                        append("$filledCount / ${PackSession.CAPACITY} cards")
+                        if (pendingCount > 0) append(" · $pendingCount pending price")
+                    }
                     Text(
-                        "$filledCount / ${PackSession.CAPACITY} cards",
+                        subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -176,13 +216,41 @@ private fun PackHeader(
                     }
                 }
             }
-            if (showCompleteButton) {
+
+            // Submit vs. Complete button. Three states:
+            //   - mid-scan with unpriced entries → "Submit N cards for pricing"
+            //     (batches them; pack stays put so the user can keep scanning)
+            //   - pack full AND has unpriced     → "Submit & complete pack →"
+            //     (one button, prices then advances)
+            //   - pack full AND fully priced      → "Complete pack →" / "Finish"
+            val showSubmit = pendingCount > 0 && !packIsFull
+            val showCompleteWithSubmit = pendingCount > 0 && packIsFull
+            val showCompleteOnly = pendingCount == 0 && packIsFull
+
+            if (showSubmit || showCompleteWithSubmit || showCompleteOnly) {
                 Spacer(Modifier.height(8.dp))
+                val label = when {
+                    showSubmit -> "Submit $pendingCount card${if (pendingCount == 1) "" else "s"} for pricing"
+                    showCompleteWithSubmit -> if (canStartNextPack) "Submit & complete pack →" else "Submit & finish"
+                    else -> if (canStartNextPack) "Complete pack →" else "Finish"
+                }
+                val onClick = if (showSubmit) onSubmitPack else onCompletePack
                 Button(
-                    onClick = onCompletePack,
+                    onClick = onClick,
+                    enabled = !isSubmitting,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(completeButtonLabel)
+                    if (isSubmitting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Fetching prices…")
+                    } else {
+                        Text(label)
+                    }
                 }
             }
         }
@@ -215,10 +283,17 @@ private fun FilledCell(
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
+            val priceLabel = entry.price?.marketPrice?.let { LocalCurrencyFormatter.current.format(it) }
+                ?: "—"
             Text(
-                LocalCurrencyFormatter.current.format(entry.price.marketPrice),
+                priceLabel,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
+                color = if (entry.price == null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSecondaryContainer
+                },
             )
         }
     }

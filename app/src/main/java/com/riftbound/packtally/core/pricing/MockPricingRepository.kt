@@ -1,6 +1,7 @@
 package com.riftbound.packtally.core.pricing
 
-import com.riftbound.packtally.feature.scanner.Variant
+import com.riftbound.packtally.model.CardPrice
+import com.riftbound.packtally.model.Variant
 import java.time.Instant
 
 /**
@@ -15,9 +16,9 @@ class MockPricingRepository : PricingRepository {
 
     override suspend fun priceMany(
         requests: List<PriceRequest>,
-    ): Map<String, Result<CardPrice>> {
+    ): Map<PriceRequest, Result<CardPrice>> {
         return requests.associate { req ->
-            req.tcgplayerId to Result.success(fakePrice(req.variant))
+            req to Result.success(fakePrice(req.variant))
         }
     }
 

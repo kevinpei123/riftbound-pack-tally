@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
@@ -15,7 +14,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -38,9 +36,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.riftbound.packtally.core.carddb.CardDatabase
-import com.riftbound.packtally.feature.scanner.Variant
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.ScannedEntry
+import com.riftbound.packtally.model.Variant
 import kotlinx.coroutines.delay
 
 private const val SEARCH_DEBOUNCE_MS = 300L
@@ -54,7 +52,6 @@ fun CorrectionSheet(
     onApply: (newCard: RiftboundCard, newVariant: Variant) -> Unit,
 ) {
     val entry = state.entry
-    val isPricing = state is CorrectionState.Pricing
 
     var selectedCard by remember(entry.id) { mutableStateOf<RiftboundCard?>(null) }
     var foilOn by remember(entry.id) { mutableStateOf(entry.variant == Variant.FOIL) }
@@ -88,8 +85,8 @@ fun CorrectionSheet(
         else -> Variant.STANDARD
     }
     val variantChanged = newVariant != entry.variant
-    val canSwap = selectedCard != null && !isPricing
-    val canUpdateVariant = variantChanged && !isPricing
+    val canSwap = selectedCard != null
+    val canUpdateVariant = variantChanged
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -168,7 +165,7 @@ fun CorrectionSheet(
                         foilOn = on
                         if (on) signatureOn = false
                     },
-                    enabled = !isPricing,
+                    enabled = true,
                     modifier = Modifier.weight(1f),
                 )
                 VariantToggleRow(
@@ -178,24 +175,12 @@ fun CorrectionSheet(
                         signatureOn = on
                         if (on) foilOn = false
                     },
-                    enabled = !isPricing,
+                    enabled = true,
                     modifier = Modifier.weight(1f),
                 )
             }
 
             Spacer(Modifier.height(12.dp))
-
-            if (isPricing) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Text("Fetching price…", style = MaterialTheme.typography.bodyMedium)
-                }
-                Spacer(Modifier.height(8.dp))
-            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -203,7 +188,6 @@ fun CorrectionSheet(
             ) {
                 OutlinedButton(
                     onClick = { onDelete(entry) },
-                    enabled = !isPricing,
                     modifier = Modifier.weight(1f),
                 ) { Text("Delete") }
                 Button(

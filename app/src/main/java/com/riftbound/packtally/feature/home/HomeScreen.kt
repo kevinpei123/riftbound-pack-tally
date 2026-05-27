@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.riftbound.packtally.feature.collection.CollectionViewModel
 import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.BoxSession
 import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
@@ -41,13 +42,19 @@ import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
 fun HomeScreen(onNavigateToScanner: () -> Unit) {
     val activity = LocalContext.current as ComponentActivity
     val packVm: PackViewModel = viewModel(viewModelStoreOwner = activity)
+    val collectionVm: CollectionViewModel = viewModel()
     val box by packVm.box.collectAsStateWithLifecycle()
     val packs by box.packs.collectAsStateWithLifecycle()
     val grandTotal by box.grandTotal.collectAsStateWithLifecycle()
     val isActive = packs.isNotEmpty()
+    val collectionState by collectionVm.state.collectAsStateWithLifecycle()
+    val pendingPrice by collectionVm.pendingPriceCount.collectAsStateWithLifecycle()
 
     var selectedMode by remember { mutableStateOf(box.mode) }
     LaunchedEffect(box) { selectedMode = box.mode }
+
+    // Refresh on every entry so the summary reflects loose scans / pack edits.
+    LaunchedEffect(Unit) { collectionVm.refresh() }
 
     Column(
         modifier = Modifier
@@ -55,7 +62,14 @@ fun HomeScreen(onNavigateToScanner: () -> Unit) {
             .padding(24.dp),
     ) {
         Text("Riftbound Pack Tally", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
+
+        CollectionSummaryCard(
+            totalCards = collectionState.totalCards,
+            totalValue = collectionState.totalValue,
+            pendingPrice = pendingPrice,
+        )
+        Spacer(Modifier.height(16.dp))
 
         if (isActive) {
             ActiveSessionCard(
@@ -104,6 +118,54 @@ fun HomeScreen(onNavigateToScanner: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (isActive) "Start new session" else "Start scanning")
+        }
+    }
+}
+
+@Composable
+private fun CollectionSummaryCard(
+    totalCards: Int,
+    totalValue: Double,
+    pendingPrice: Int,
+) {
+    val formatter = LocalCurrencyFormatter.current
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Your collection",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Column {
+                    Text(
+                        formatter.format(totalValue),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "$totalCards card" + if (totalCards == 1) "" else "s",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (pendingPrice > 0) {
+                    Text(
+                        "$pendingPrice pending price",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
     }
 }

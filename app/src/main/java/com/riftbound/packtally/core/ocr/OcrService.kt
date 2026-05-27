@@ -50,14 +50,22 @@ object OcrService {
         } else {
             bitmap
         }
-        val first = doRecognize(firstInput)
+        val first = try {
+            doRecognize(firstInput)
+        } finally {
+            if (firstInput !== bitmap && !firstInput.isRecycled) firstInput.recycle()
+        }
 
         val maxConfidence = first.maxOfOrNull { it.confidence } ?: 0f
         if (maxConfidence < LOW_CONFIDENCE_THRESHOLD) {
             val preprocessed = withContext(Dispatchers.Default) {
                 preprocess(bitmap, applyOtsu = true)
             }
-            return doRecognize(preprocessed)
+            return try {
+                doRecognize(preprocessed)
+            } finally {
+                if (!preprocessed.isRecycled) preprocessed.recycle()
+            }
         }
         return first
     }
@@ -71,7 +79,13 @@ object OcrService {
      */
     fun preprocess(bitmap: Bitmap, applyOtsu: Boolean = false): Bitmap {
         val grayContrast = applyGrayscaleAndContrast(bitmap)
-        return if (applyOtsu) applyOtsuThresholding(grayContrast) else grayContrast
+        return if (applyOtsu) {
+            val otsu = applyOtsuThresholding(grayContrast)
+            if (otsu !== grayContrast && !grayContrast.isRecycled) grayContrast.recycle()
+            otsu
+        } else {
+            grayContrast
+        }
     }
 
     private suspend fun doRecognize(bitmap: Bitmap): List<TextBlock> {

@@ -24,6 +24,7 @@ class DataStoreSettingsRepository(
             usdToTargetRate = prefs[Keys.ConversionRate] ?: 1.55,
             cacheTtlHours = prefs[Keys.CacheTtlHours] ?: 6,
             forceOcrPreprocessing = prefs[Keys.ForcePreprocessing] ?: false,
+            ocrDebugLogging = prefs[Keys.OcrDebugLogging] ?: false,
         )
     }
 
@@ -54,6 +55,10 @@ class DataStoreSettingsRepository(
         dataStore.edit { it[Keys.ForcePreprocessing] = value }
     }
 
+    override suspend fun setOcrDebugLogging(value: Boolean) {
+        dataStore.edit { it[Keys.OcrDebugLogging] = value }
+    }
+
     override suspend fun resetAll() {
         dataStore.edit { it.clear() }
     }
@@ -64,5 +69,6 @@ class DataStoreSettingsRepository(
         val ConversionRate = doublePreferencesKey("conversion_rate")
         val CacheTtlHours = intPreferencesKey("cache_ttl_hours")
         val ForcePreprocessing = booleanPreferencesKey("force_ocr_preprocessing")
+        val OcrDebugLogging = booleanPreferencesKey("ocr_debug_logging")
     }
 }

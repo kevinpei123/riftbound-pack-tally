@@ -1,103 +1,138 @@
-# Smoke Test — Box-Day Readiness
+# Smoke Test — Post-Install Sanity
 
-15–20 minute sequence on the P30 Pro after `adb install -r app-debug.apk`.
-Each step: **action** → **expected** → *if it fails, check this*.
+15–20 minute sequence on the P30 Pro after `./gradlew installDebug`. Each
+step: **action** → **expected** → *if it fails, check this*.
 
 ## Setup
 
-1. **Uninstall + reinstall.**
-   - Action: `adb uninstall com.riftbound.packtally && adb install -r app/build/outputs/apk/debug/app-debug.apk`
-   - Expected: `Success` from both commands. App icon appears in launcher.
-   - *Fails?* `adb devices` to confirm phone connected. USB mode = MTP. HiSuite HDB off.
+1. **Reinstall fresh.**
+   - Action: `adb uninstall com.riftbound.packtally && ./gradlew installDebug`
+   - Expected: `Success` from both. App icon appears in launcher.
+   - *Fails?* `adb devices` to confirm phone connected. USB mode = MTP.
 
-2. **First launch → grant camera permission.**
-   - Action: Tap app icon → Home tab loads → tap Scan tab.
-   - Expected: Permission dialog. Tap Allow. Camera preview within ~2 s.
-   - *Fails?* Camera permission was denied — re-trigger via Settings → Apps → Riftbound Pack Tally → Permissions.
+2. **First launch → Riftcodex sync.**
+   - Action: Tap app icon. App opens to FirstLaunchScreen.
+   - Expected: "Setting up card database" + spinner. After ~5–15 s,
+     transitions to AppNav. `adb logcat -s CardDbSync` shows
+     `Sync complete — 1064 cards in DB` (or current catalogue size).
+   - *Fails?* Network down? Riftcodex envelope change? See `docs/API_NOTES.md`.
 
-3. **Enter tcgapi.dev API key.**
-   - Action: Settings tab → API key field → paste `tcg_live_…`.
-   - Expected: Field shows the key. Settings → Quota → reset counter (debug) to ensure starting clean.
-   - *Fails?* Quota card missing? Check `App.onCreate` actually built `QuotaTracker`.
+3. **Camera permission.**
+   - Action: Tap Scan tab. Dialog. Allow.
+   - Expected: Camera preview in the 5:7 frame within ~2 s.
 
-## Quick Scan — 3 individual cards
+4. **Enter JustTCG API key.**
+   - Action: Settings tab → API key field → paste `tcg_…`.
+   - Expected: Field shows the key. No error message under the field.
 
-4. **Quick Scan a Common card (Standard).**
-   - Action: Quick tab → camera opens → align bottom-left of a Common card in the guide rectangle → FAB capture → variant sheet → Standard → wait for Saved.
-   - Expected: "Added to your collection" sheet with name + setCode-collectorNumber + price (e.g. A$0.16 if AUD). Session tally at top reads "1 card added · A$0.16".
-   - *Fails?* OCR returning Failed? Check the OCR confidence proxy — `adb logcat -s QuickScanViewModel`. Try "Type instead" → search by name.
+## Quick Scan — priceless
 
-5. **Quick Scan a Foil card, hit "Scan Another".**
-   - Action: On the Saved sheet, tap "Scan Another". Camera resumes. Capture next card. Variant sheet → Foil.
-   - Expected: Saved sheet again. Session tally now "2 cards added · A$…".
-   - *Fails?* Foil glare? Settings → toggle "Force OCR preprocessing" on.
+5. **Quick Scan a Standard card.**
+   - Action: Quick tab → camera live → align card in frame → tap FAB →
+     variant sheet → Standard.
+   - Expected: "Added to your collection · price pending" sheet. Top chip
+     shows "1 card added · 1 pending price".
+   - *Fails?* OCR returning Failed? `adb logcat -s QuickScanViewModel`.
+     Use "Type instead" to bypass.
 
-6. **Quick Scan a Signature card, hit "Done".**
-   - Action: Scan Another → capture signature card → Signature → Done.
-   - Expected: Sheet dismisses. Camera live. Session tally persists ("3 cards added · A$…").
+6. **Rapid Mode.**
+   - Action: Toggle "Rapid mode" at the top. Scan another card.
+   - Expected: No variant sheet. Card saved as STANDARD. Top chip sub-line
+     reads "Last: <card name>". Tally now "2 cards added · 2 pending price".
 
-## Verify Collection
+7. **Submit all pending from Quick Scan.**
+   - Action: Tap "Submit 2 cards for pricing".
+   - Expected: Spinner. One POST in
+     `adb logcat -s okhttp.OkHttpClient` → 200 response. Toast
+     "Priced 2 cards — $X.XX". Pending count drops to 0; tally total updates.
 
-7. **All 3 cards appear in Collection.**
-   - Action: Tap Cards (Collection) tab.
-   - Expected: Total header reads 3 cards across some sets. Set-grouped list shows all 3.
-   - *Fails?* Pull to refresh. Check `adb logcat -s CollectionViewModel`.
+## Collection — manual add + remove + submit
 
-## Pack mode (partial — just to exercise the flow)
+8. **Verify Quick Scan cards in Collection.**
+   - Action: Tap Cards tab.
+   - Expected: Both cards listed with thumbnails and source label
+     "manual / quick".
 
-8. **Open a box (or single pack).**
-   - Action: Home → toggle to "Open a Box (24 packs)" → Start scanning → land on Scan tab.
-   - Expected: Camera live. Pack tab now shows pack 1, 0/14 cards.
+9. **Manual add a known card.**
+   - Action: "+ Add card" → search "Vilemaw" → tap a result → pick Standard.
+   - Expected: Sheet closes. Toast "Added Vilemaw". Row appears in Collection
+     with thumbnail and `—` for total value.
 
-9. **Scan 14 cards into pack 1.**
-   - Action: Capture cards through the variant sheet. Use "Standard" for speed unless the card actually is foil.
-   - Expected: After the 14th, the "Complete pack →" button appears in the sticky header on Pack tab.
+10. **Header shows submit button for pending.**
+    - Expected: "Submit 1 card for pricing" appears between
+      Add card / Export and the search bar.
 
-10. **Force-stop mid-pack-2.**
-    - Action: Tap Complete pack → start pack 2 → scan 5 cards. Then Phone Settings → Apps → Riftbound Pack Tally → Force stop. Reopen app.
-    - Expected: Home tab shows active session. Pack tab shows pack 2 with all 5 cards intact. Box tab shows pack 1 (complete, total $X) + pack 2 (5/14 cards).
-    - *Fails?* Restore was supposed to fire in `PackViewModel.init`. Check `adb logcat -s PackViewModel` for "Restore failed".
+11. **Submit from Collection.**
+    - Action: Tap the Submit button.
+    - Expected: Spinner → toast confirming → price populates.
 
-## Manual correction
+12. **Manual remove.**
+    - Action: Tap the "−" icon on the Vilemaw row → confirm.
+    - Expected: Row removed (or quantity decremented). Toast "Removed one
+      Vilemaw".
 
-11. **Swap a card in pack 1.**
-    - Action: Box tab → wait, Box doesn't allow editing. Pack tab → swipe back to pack 1 view (or you may need to navigate Box → Pack — currently Pack only shows active pack, not earlier; tap any FILLED cell in the visible pack).
-    - Expected: Bottom sheet opens with current card + top-3 fuzzy candidates + search field. Search "OGN" → tap a candidate → Swap → entry replaced.
-    - *Note:* Pack screen only renders the active pack currently. Editing earlier-pack cards requires either drilling in from Box (not wired) or completing the active pack to push it to the active position.
+## Pack mode — batched submit
 
-## Quota awareness
+13. **Start a single pack.**
+    - Action: Home → "Single Pack" → Start scanning. Land on Scan tab.
+    - Expected: Camera live. Pack tab shows 0/14 cards.
 
-12. **Settings → Quota readout.**
-    - Action: Settings → scroll to Quota card.
-    - Expected: `19 / 1000 requests today` (or however many you've burned). Progress bar small. "Resets in HH:MM (UTC midnight)" shows.
-    - *Fails?* Quota not incrementing? Check that `QuotaAwarePricingRepository` is in the chain (App.kt).
+14. **Scan 14 cards.**
+    - Action: Capture 14 cards through the variant sheet.
+    - Expected: Grid fills up. Running total stays $0.00 (priceless until
+      Submit). Header button changes from
+      "Submit N cards for pricing" → "Submit & finish" when the pack fills.
+
+15. **Submit the pack.**
+    - Action: Tap "Submit & finish".
+    - Expected: Spinner. One POST. Prices populate in every cell. Running
+      total updates. Toast "Priced 14 cards — $X.XX".
+
+## Cross-pack remove
+
+16. **Verify pack entries in Collection.**
+    - Action: Cards tab.
+    - Expected: 14 new rows with source label "from pack".
+
+17. **Remove one cross-pack.**
+    - Action: Tap "−" on any pack-derived row → Remove.
+    - Expected: Row decrements, toast success.
+    - *Verify:* `adb shell sqlite3 ...` the `pack_sessions.entriesJson`
+      column has one fewer entry, OR navigate back to Pack tab — if the
+      previously-completed pack becomes the active box, the missing card
+      shows as a "Tap to scan" cell.
+
+## Camera tab switching
+
+18. **Rapid Scanner ↔ Quick Scan switch.**
+    - Action: Tap Scan tab → Quick Scan tab → Scan tab → Quick Scan tab in
+      quick succession.
+    - Expected: Live camera preview every time. No black screen, no crash.
+    - *Fails?* Check `adb logcat` for `CameraScreen` errors. The fix tracks
+      owned use-cases per screen; if both screens are unbinding all,
+      something regressed.
+
+## Persistence
+
+19. **Force-stop → reopen mid-pack.**
+    - Action: Mid-pack, force-stop via Phone Settings. Reopen.
+    - Expected: Home shows active session. Pack tab restores all scanned
+      cards exactly as left, with their priced/unpriced state intact.
 
 ## Export
 
-13. **Export to JSON.**
-    - Action: Cards tab → Export JSON button.
-    - Expected: Toast "Exported to /storage/emulated/0/Android/data/com.riftbound.packtally/files/collection-<timestamp>.json".
-    - Verify externally: `adb pull "/sdcard/Android/data/com.riftbound.packtally/files/collection-*.json" ./` → open in laptop editor → valid JSON with `sets` AND `loose_scans` arrays.
-
-## Backup
-
-14. **Manual backup.**
-    - Action: Settings → "Backups & restore →" → "Back up now".
-    - Expected: Toast with path. `/sdcard/Android/data/com.riftbound.packtally/files/backups/riftbound-backup-<ts>.zip`.
-    - Verify: `adb pull` the zip → unzip on laptop → see `database.db`, `prefs.json` (no API key), `cache/...`, `manifest.json`.
-
-## Currency switch
-
-15. **Toggle to USD.**
-    - Action: Settings → Currency segmented row → USD.
-    - Expected: Conversion rate field disappears (USD = 1:1). Cards tab + Pack tab + Quick tally all re-render with `$` prices instead of `A$`.
+20. **Export to JSON.**
+    - Action: Cards tab → Export JSON.
+    - Expected: Toast "Exported to /storage/…/collection-<ts>.json".
+      `adb pull` confirms valid JSON with `sets` and `loose_scans` arrays.
 
 ---
 
-**If all 15 pass:** you're ready for box day. Open the box with confidence.
+**If all 20 pass:** you're ready for box day.
 
-**Common box-day surprises:**
-- Glare from card sleeves — peel them off, or rely on the Otsu retry.
-- Lighting too dim — use a desk lamp directly above the card.
-- Pricing call slow — that's tcgapi.dev round-trip + cache write. Cached re-scans are instant.
-- Quota at 80% surprise — the Snackbar fires once per session; after dismissing, Settings is where you watch the counter.
+**Common surprises:**
+- First launch is slow because of the Riftcodex sync. Subsequent launches
+  are instant.
+- Submit failure = network blip. Hit Submit again, entries stay in place.
+- Scanning a card that isn't in the local DB shows a Failed sheet. Either
+  re-sync from Settings, or manually pick from search.

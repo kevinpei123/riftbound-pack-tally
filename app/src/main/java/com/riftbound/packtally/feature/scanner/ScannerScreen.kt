@@ -8,10 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -30,6 +27,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.App
 import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.RiftboundCard
+import com.riftbound.packtally.model.Variant
 
 private const val RESCAN_THRESHOLD = 0.7f
 
@@ -67,23 +65,11 @@ fun ScannerScreen() {
                     reason = r.reason,
                     onRescan = scannerVm::reset,
                 )
-                is ScanResult.Pricing -> PricingContent(
-                    card = r.card,
-                    variant = r.variant,
-                )
-                is ScanResult.PricingFailed -> PricingFailedContent(
-                    card = r.card,
-                    variant = r.variant,
-                    reason = r.reason,
-                    onRetry = scannerVm::retryPricing,
-                    onSkip = scannerVm::reset,
-                )
                 else -> Unit
             }
         }
     }
 }
-
 @Composable
 private fun IdentifiedContent(
     card: RiftboundCard,
@@ -194,77 +180,6 @@ private fun FailedContent(
         Spacer(Modifier.height(24.dp))
         Button(onClick = onRescan, modifier = Modifier.fillMaxWidth()) {
             Text("Re-scan")
-        }
-        Spacer(Modifier.height(16.dp))
-    }
-}
-
-@Composable
-private fun PricingContent(card: RiftboundCard, variant: Variant) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-    ) {
-        Text(card.name, style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = "${card.setCode}-${card.collectorNumber}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(24.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "Fetching ${variant.name.lowercase()} price…",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        Spacer(Modifier.height(16.dp))
-    }
-}
-
-@Composable
-private fun PricingFailedContent(
-    card: RiftboundCard,
-    variant: Variant,
-    reason: String,
-    onRetry: () -> Unit,
-    onSkip: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-    ) {
-        Text(
-            "Couldn't fetch ${variant.name.lowercase()} price",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "${card.name} • ${card.setCode}-${card.collectorNumber}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            reason,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-        )
-        Spacer(Modifier.height(24.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(onClick = onSkip, modifier = Modifier.weight(1f)) { Text("Skip") }
-            Button(onClick = onRetry, modifier = Modifier.weight(1f)) { Text("Retry") }
         }
         Spacer(Modifier.height(16.dp))
     }

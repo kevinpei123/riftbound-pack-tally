@@ -1,12 +1,14 @@
 package com.riftbound.packtally.ui.nav
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -20,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -72,6 +75,11 @@ fun AppNav() {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
+            // Seven tabs in ~360dp means each slot is only ~51dp wide. Default
+            // M3 label typography (labelMedium, 12sp) wraps to two lines for
+            // even short words on some devices. Drop to labelSmall + maxLines=1
+            // + softWrap=false so labels stay on one line and just clip on
+            // truly long ones instead of pushing the bar taller.
             NavigationBar {
                 Destination.entries.forEach { dest ->
                     val selected = backStackEntry?.destination?.hierarchy
@@ -79,8 +87,22 @@ fun AppNav() {
                     NavigationBarItem(
                         selected = selected,
                         onClick = { navController.navigateToTab(dest.route) },
-                        icon = { Icon(dest.icon, contentDescription = dest.label) },
-                        label = { Text(dest.label) },
+                        icon = {
+                            Icon(
+                                dest.icon,
+                                contentDescription = dest.label,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        },
+                        label = {
+                            Text(
+                                dest.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(),
                     )
                 }
             }
