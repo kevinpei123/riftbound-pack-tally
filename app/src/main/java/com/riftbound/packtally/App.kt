@@ -6,6 +6,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.riftbound.packtally.core.backup.BackupRepository
 import com.riftbound.packtally.core.carddb.CardDbSync
 import com.riftbound.packtally.core.carddb.RiftcodexClient
+import com.riftbound.packtally.core.currency.CurrencyRateRepository
+import com.riftbound.packtally.core.currency.FrankfurterCurrencyRateService
 import com.riftbound.packtally.core.persistence.BackfillJob
 import com.riftbound.packtally.core.persistence.CardDao
 import com.riftbound.packtally.core.persistence.LooseScanRepository
@@ -23,6 +25,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import java.time.Duration
 
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")
@@ -45,6 +48,9 @@ class App : Application() {
         private set
 
     lateinit var settingsRepository: SettingsRepository
+        private set
+
+    lateinit var currencyRateRepository: CurrencyRateRepository
         private set
 
     lateinit var quotaTracker: QuotaTracker
@@ -74,6 +80,10 @@ class App : Application() {
         super.onCreate()
 
         settingsRepository = DataStoreSettingsRepository(settingsDataStore)
+        currencyRateRepository = CurrencyRateRepository(
+            service = FrankfurterCurrencyRateService(),
+            settingsRepository = settingsRepository,
+        )
 
         quotaTracker = QuotaTracker(
             dataStore = settingsDataStore,
@@ -96,7 +106,7 @@ class App : Application() {
         pricing = cachedPricing
 
         sessionDatabase = SessionDatabase.create(this)
-        sessionRepository = SessionRepository(sessionDatabase.sessionDao())
+        sessionRepository = SessionRepository(sessionDatabase.sessionDao(), settingsDataStore)
         looseScanRepository = LooseScanRepository(sessionDatabase.looseScanDao())
         cardDao = sessionDatabase.cardDao()
 
@@ -117,6 +127,13 @@ class App : Application() {
             sessionDatabase = sessionDatabase,
             settingsRepository = settingsRepository,
         )
+
+        appScope.launch {
+            currencyRateRepository.refreshIfStale()
+        }
+        appScope.launch {
+            sessionRepository.migrateLegacyPacksIfNeeded()
+        }
     }
 
     suspend fun resetAll() {

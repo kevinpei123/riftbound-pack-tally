@@ -32,7 +32,12 @@ android {
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = false
+            // R8 code shrinking + resource shrinking. This is the main lever
+            // for a small APK: it tree-shakes unused code (including all the
+            // unused material-icons-extended vectors) and strips unused
+            // resources. Keep rules live in proguard-rules.pro.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -108,9 +113,6 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.datastore.preferences)
-
-    // Image loading
-    implementation(libs.coil.compose)
 
     // Unit tests
     testImplementation(libs.junit.jupiter)

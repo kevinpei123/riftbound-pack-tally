@@ -57,6 +57,30 @@ class CardDbSyncTest {
         assertEquals(listOf("valid"), dao.rows.map { it.id })
         assertEquals("UNL-060a", dao.rows.single().collectorNumber)
         assertEquals("UNL", dao.rows.single().setCode)
+        assertEquals("", dao.rows.single().domains)
+    }
+
+    @Test
+    fun `domain classification is persisted for collection filters`() = runBlocking {
+        val dao = FakeCardDao(mutableListOf())
+        val sync = CardDbSync(
+            FakeSource(
+                listOf(
+                    dto(id = "domain", tcgplayerId = "123", riftboundId = "unl-060-219").copy(
+                        classification = RiftcodexClassification(
+                            rarity = "rare",
+                            domain = listOf("Fury", "Mind"),
+                        ),
+                    ),
+                ),
+            ),
+            dao,
+            freshDataStore(),
+        )
+
+        sync.runFullSync()
+
+        assertEquals("Fury|Mind", dao.rows.single().domains)
     }
 
     @Test

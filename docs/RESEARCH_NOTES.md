@@ -19,6 +19,7 @@ Date: 2026-05-26
 - TCGplayer app scanner FAQ: https://help.tcgplayer.com/hc/en-us/articles/115009506407-TCGplayer-App-FAQ
 - ManaBox scanner FAQ: https://www.manabox.app/guides/scanner/faq/
 - Dragon Shield scanner app listing: https://apps.apple.com/us/app/fab-scanner-dragon-shield/id1619340476
+- Frankfurter exchange-rate API docs: https://frankfurter.dev/docs/
 
 ## Decisions From Research
 
@@ -33,3 +34,4 @@ Date: 2026-05-26
 - DataStore should stay behind a repository. Tests added in this pass avoid live DataStore where possible; future DataStore tests should use a temp file/fake repository.
 - Baseline Profiles/Macrobenchmark are useful for startup and jank, but adding a benchmark module is deferred because this pass already found and fixed a duplicate-sync startup bug first.
 - Do not copy proprietary scanner UI/assets. UX changes are limited to clearer states, debug diagnostics, and reducing confusing copy.
+- Use Frankfurter for currency conversion because it is public, no-key, and supports latest USD-to-target rates through `api.frankfurter.dev`. Cache rates in DataStore and never block app workflows on currency refresh.

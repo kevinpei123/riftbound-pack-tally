@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -199,6 +200,8 @@ private fun RapidModeChip(
                     sub,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Switch(checked = enabled, onCheckedChange = onToggle)
@@ -301,7 +304,12 @@ private fun IdentifiedContent(
             .fillMaxWidth()
             .padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
-        Text(card.name, style = MaterialTheme.typography.headlineSmall)
+        Text(
+            card.name,
+            style = MaterialTheme.typography.headlineSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
         Spacer(Modifier.height(4.dp))
         Text(
             "${card.setCode}-${card.collectorNumber} • " +
@@ -355,7 +363,13 @@ private fun AmbiguousContent(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(card.name, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        card.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     Text(
                         "${card.setCode}-${card.collectorNumber}",
                         style = MaterialTheme.typography.bodySmall,
@@ -392,7 +406,12 @@ private fun SavedContent(
             ),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(card.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    card.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Text(
                     "${card.setCode}-${card.collectorNumber} • " +
                         variant.name.lowercase().replaceFirstChar { it.uppercase() },
@@ -524,7 +543,13 @@ private fun ManualCandidateRow(card: RiftboundCard, onClick: () -> Unit) {
         onClick = onClick,
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(card.name, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                card.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(
                 "${card.setCode}-${card.collectorNumber} • " +
                     card.rarity.name.lowercase().replaceFirstChar { it.uppercase() },

@@ -1,6 +1,7 @@
 package com.riftbound.packtally.core.settings
 
 import kotlinx.coroutines.flow.Flow
+import java.time.Instant
 
 enum class Currency(val symbol: String, val code: String) {
     USD(symbol = "$", code = "USD"),
@@ -18,7 +19,12 @@ enum class Currency(val symbol: String, val code: String) {
 data class AppSettings(
     val apiKey: String? = null,
     val currency: Currency = Currency.AUD,
-    val usdToTargetRate: Double = 1.55,
+    val usdToTargetRate: Double = 1.0,
+    val exchangeRateBase: String = "USD",
+    val exchangeRateTarget: String = currency.code,
+    val exchangeRateFetchedAt: Instant? = null,
+    val exchangeRateSource: String? = null,
+    val exchangeRateWarning: String? = null,
     // JustTCG refreshes Riftbound pricing every ~4h, so a 6h window matches
     // their cadence comfortably while reusing cached entries within a session.
     val cacheTtlHours: Int = 6,
@@ -35,6 +41,14 @@ interface SettingsRepository {
     suspend fun setApiKey(value: String?)
     suspend fun setCurrency(currency: Currency)
     suspend fun setConversionRate(rate: Double)
+    suspend fun setExchangeRate(
+        rate: Double,
+        base: String,
+        target: String,
+        fetchedAt: Instant,
+        source: String,
+    )
+    suspend fun setExchangeRateWarning(message: String?)
     suspend fun setCacheTtlHours(hours: Int)
     suspend fun setForceOcrPreprocessing(value: Boolean)
     suspend fun setOcrDebugLogging(value: Boolean)

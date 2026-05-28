@@ -5,18 +5,19 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.riftbound.packtally.App
-import com.riftbound.packtally.core.persistence.LooseScanRepository
 import com.riftbound.packtally.core.persistence.SessionRepository
+import com.riftbound.packtally.model.PricingStatus
 import com.riftbound.packtally.model.Rarity
 import com.riftbound.packtally.model.RiftboundCard
-import com.riftbound.packtally.model.ScannedEntry
+import com.riftbound.packtally.model.ScanEntrySource
+import com.riftbound.packtally.model.ScanSessionEntry
 import com.riftbound.packtally.model.Variant
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
@@ -28,7 +29,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.time.Instant
-import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
@@ -40,52 +40,74 @@ data class CollectionEntry(
     val quantity: Int,
     val unitPrice: Double,
     val totalMarketValue: Double,
-    /** Subset of [quantity] that came from loose scans (manual add / Quick Scan). */
-    val looseQuantity: Int = 0,
-    /** Subset of [quantity] that came from pack scans. Always = quantity - looseQuantity. */
-    val packQuantity: Int = 0,
-    /** True if at least one copy needs a price fetched. */
-    val hasPendingPrice: Boolean = false,
+    val pendingCount: Int,
+    val failedCount: Int,
+    val unpriceableCount: Int,
+    val latestScannedAt: Instant,
+    val domains: List<String>,
 )
 
+enum class CollectionSort {
+    NAME,
+    SET,
+    COLLECTOR,
+    RARITY,
+    DOMAIN,
+    QUANTITY,
+    VALUE,
+    RECENT,
+}
+
+enum class CollectionGroupMode {
+    SET,
+    RARITY,
+    DOMAIN,
+    VARIANT,
+    NONE,
+}
+
 data class CollectionFilter(
-    val foilOnly: Boolean = false,
-    val signatureOnly: Boolean = false,
-    val looseOnly: Boolean = false,
-    val selectedRarities: Set<Rarity> = emptySet(),
-    val nameQuery: String = "",
+    val query: String = "",
+    val sort: CollectionSort = CollectionSort.RECENT,
+    val group: CollectionGroupMode = CollectionGroupMode.SET,
+    val pendingOnly: Boolean = false,
+    val variant: Variant? = null,
+    val setCode: String? = null,
+    val rarity: Rarity? = null,
+    val domain: String? = null,
+)
+
+data class CollectionOptions(
+    val sets: List<String> = emptyList(),
+    val domains: List<String> = emptyList(),
+    val rarities: List<Rarity> = emptyList(),
 )
 
 data class CollectionGroup(
-    val setCode: String,
+    val title: String,
     val entries: List<CollectionEntry>,
     val totalValue: Double,
+    val totalCards: Int,
 )
 
 data class CollectionState(
     val groups: List<CollectionGroup> = emptyList(),
     val totalValue: Double = 0.0,
     val totalCards: Int = 0,
+    val uniqueCards: Int = 0,
+    val pendingPriceCount: Int = 0,
     val filter: CollectionFilter = CollectionFilter(),
+    val options: CollectionOptions = CollectionOptions(),
     val isLoading: Boolean = true,
-    val hasAnyCompletedPacks: Boolean = false,
 )
 
 sealed interface CollectionEvent {
     data class ExportSucceeded(val path: String) : CollectionEvent
     data class ExportFailed(val reason: String) : CollectionEvent
-
-    /** Manual "+ Add card" succeeded; UI shows a confirmation toast. */
     data class ManualAddSucceeded(val cardName: String) : CollectionEvent
-
     data class RemoveSucceeded(val cardName: String) : CollectionEvent
-
-    /** Row vanished between when the list was rendered and the user tapped
-     *  remove — vanishingly rare; surface a soft error so the user knows
-     *  nothing happened. */
     data class RemoveNotFound(val cardName: String) : CollectionEvent
-
-    data class SubmitCompleted(val priced: Int, val failed: Int, val totalValue: Double) : CollectionEvent
+    data class SubmitCompleted(val priced: Int, val failed: Int, val unpriceable: Int) : CollectionEvent
     data class SubmitFailed(val reason: String) : CollectionEvent
 }
 
@@ -93,186 +115,131 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private val app = application as App
     private val sessionRepository: SessionRepository = app.sessionRepository
-    private val looseScanRepository: LooseScanRepository = app.looseScanRepository
 
-    private val _allEntries = MutableStateFlow<List<CollectionEntry>>(emptyList())
     private val _filter = MutableStateFlow(CollectionFilter())
-    private val _isLoading = MutableStateFlow(true)
-    private val _hasAnyCompletedPacks = MutableStateFlow(false)
-    private val _pendingPriceCount = MutableStateFlow(0)
-    val pendingPriceCount: StateFlow<Int> = _pendingPriceCount.asStateFlow()
     private val _submitInFlight = MutableStateFlow(false)
     val submitInFlight: StateFlow<Boolean> = _submitInFlight.asStateFlow()
 
+    private val _pricingProgress = MutableStateFlow<String?>(null)
+    val pricingProgress: StateFlow<String?> = _pricingProgress.asStateFlow()
+
     val state: StateFlow<CollectionState> =
-        combine(
-            _allEntries,
-            _filter,
-            _isLoading,
-            _hasAnyCompletedPacks,
-        ) { entries, filter, isLoading, hasAny ->
-            val filtered = applyFilter(entries, filter)
-            val grouped = filtered
-                .groupBy { it.card.setCode }
-                .map { (setCode, list) ->
-                    val sorted = list.sortedByDescending { it.totalMarketValue }
-                    CollectionGroup(
-                        setCode = setCode,
-                        entries = sorted,
-                        totalValue = sorted.sumOf { it.totalMarketValue },
-                    )
-                }
-                .sortedByDescending { it.totalValue }
-            CollectionState(
-                groups = grouped,
-                totalValue = filtered.sumOf { it.totalMarketValue },
-                totalCards = filtered.sumOf { it.quantity },
-                filter = filter,
-                isLoading = isLoading,
-                hasAnyCompletedPacks = hasAny,
-            )
+        combine(sessionRepository.observeAllEntries(), _filter) { entries, filter ->
+            buildState(entries, filter)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, CollectionState())
 
     private val _events = MutableSharedFlow<CollectionEvent>()
     val events: SharedFlow<CollectionEvent> = _events.asSharedFlow()
 
-    init {
-        refresh()
-        viewModelScope.launch {
-            app.resetEvents.collect { refresh() }
-        }
+    fun refresh() = Unit
+
+    fun setQuery(query: String) {
+        _filter.value = _filter.value.copy(query = query)
     }
 
-    fun refresh() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            val boxes = runCatching { sessionRepository.loadAllBoxes() }
-                .onFailure { Log.e(TAG, "Loading sessions failed", it) }
-                .getOrDefault(emptyList())
-
-            // Every scanned card appears in Collection — pack entries no longer
-            // wait for the pack to be "full" / submitted. Unpriced entries just
-            // show with $0 totals until the user submits and prices land.
-            val allPackEntries = boxes.flatMap { box -> box.packs.value.flatMap { it.entries.value } }
-
-            // Loose scans participate in Collection aggregation.
-            val looseEntries = runCatching { looseScanRepository.getAllForExport() }
-                .onFailure { Log.e(TAG, "Loading loose scans failed", it) }
-                .getOrDefault(emptyList())
-
-            _hasAnyCompletedPacks.value = allPackEntries.isNotEmpty() || looseEntries.isNotEmpty()
-            _allEntries.value = aggregate(allPackEntries + looseEntries)
-            _pendingPriceCount.value = runCatching { looseScanRepository.getPending().size }
-                .getOrDefault(0)
-            _isLoading.value = false
-        }
+    fun setSort(sort: CollectionSort) {
+        _filter.value = _filter.value.copy(sort = sort)
     }
 
-    /** Identical to QuickScanViewModel.submitPending, but reachable from Collection. */
-    fun submitPendingPrices() {
-        if (_submitInFlight.value) return
-        _submitInFlight.value = true
-        viewModelScope.launch {
-            when (val result = looseScanRepository.submitPendingPrices(app.pricing)) {
-                is com.riftbound.packtally.core.persistence.LooseScanRepository.SubmitResult.Empty ->
-                    _events.emit(CollectionEvent.SubmitCompleted(priced = 0, failed = 0, totalValue = 0.0))
-                is com.riftbound.packtally.core.persistence.LooseScanRepository.SubmitResult.Done ->
-                    _events.emit(
-                        CollectionEvent.SubmitCompleted(
-                            priced = result.priced,
-                            failed = result.failed,
-                            totalValue = result.totalValue,
-                        ),
-                    )
-                is com.riftbound.packtally.core.persistence.LooseScanRepository.SubmitResult.NetworkError ->
-                    _events.emit(CollectionEvent.SubmitFailed(result.reason))
-            }
-            _submitInFlight.value = false
-            refresh()
-        }
+    fun setGroup(group: CollectionGroupMode) {
+        _filter.value = _filter.value.copy(group = group)
     }
 
-    fun toggleFoilFilter() {
-        _filter.value = _filter.value.copy(foilOnly = !_filter.value.foilOnly)
+    fun togglePendingOnly() {
+        _filter.value = _filter.value.copy(pendingOnly = !_filter.value.pendingOnly)
     }
 
-    fun toggleSignatureFilter() {
-        _filter.value = _filter.value.copy(signatureOnly = !_filter.value.signatureOnly)
+    fun setVariant(variant: Variant?) {
+        _filter.value = _filter.value.copy(variant = variant)
     }
 
-    fun toggleRarityFilter(rarity: Rarity) {
-        val current = _filter.value.selectedRarities
-        _filter.value = _filter.value.copy(
-            selectedRarities = if (rarity in current) current - rarity else current + rarity,
-        )
+    fun setSetCode(setCode: String?) {
+        _filter.value = _filter.value.copy(setCode = setCode)
     }
 
-    fun toggleLooseOnlyFilter() {
-        _filter.value = _filter.value.copy(looseOnly = !_filter.value.looseOnly)
+    fun setRarity(rarity: Rarity?) {
+        _filter.value = _filter.value.copy(rarity = rarity)
     }
 
-    fun setNameQuery(query: String) {
-        _filter.value = _filter.value.copy(nameQuery = query)
+    fun setDomain(domain: String?) {
+        _filter.value = _filter.value.copy(domain = domain)
     }
 
     fun clearFilters() {
         _filter.value = CollectionFilter()
     }
 
-    /**
-     * Persist a card the user added by hand (not via OCR). Stored as a loose
-     * scan with `price = null` — the next batch submit on the Quick Scan tab
-     * picks it up. We deliberately don't auto-fire a single-card pricing call,
-     * since that would burn one JustTCG quota slot per add.
-     */
     fun addManualEntry(card: RiftboundCard, variant: Variant) {
         viewModelScope.launch {
-            runCatching { looseScanRepository.saveEntry(card, variant, price = null) }
-                .onFailure { Log.e(TAG, "Manual add failed for ${card.id} $variant", it) }
-                .onSuccess {
-                    _events.emit(CollectionEvent.ManualAddSucceeded(card.name))
-                    refresh()
-                }
+            runCatching {
+                sessionRepository.addEntry(
+                    card = card,
+                    variant = variant,
+                    source = ScanEntrySource.MANUAL,
+                    confidence = 1.0f,
+                )
+            }.onFailure {
+                Log.e(TAG, "Manual add failed for ${card.id} $variant", it)
+            }.onSuccess {
+                _events.emit(CollectionEvent.ManualAddSucceeded(card.name))
+            }
         }
     }
 
-    /**
-     * Remove one copy of (card, variant). Preference order:
-     *   1. The most recent loose-scan row (manual add or quick-scan).
-     *   2. Failing that, the most recent matching entry inside any persisted pack.
-     *
-     * Reaching into past packs matters because the Pack tab only shows the
-     * active pack — if a card lives in a previously-completed pack the user
-     * has no other way to remove it. Surfacing it here keeps Collection as the
-     * single source of truth for "what do I own".
-     */
     fun removeOne(card: RiftboundCard, variant: Variant) {
         viewModelScope.launch {
-            val looseDeleted = runCatching { looseScanRepository.deleteOneMatching(card.id, variant) }
-                .onFailure { Log.e(TAG, "Loose remove failed for ${card.id} $variant", it) }
+            val deleted = runCatching { sessionRepository.removeLatestEntryByCardVariant(card.id, variant) }
+                .onFailure { Log.e(TAG, "Remove failed for ${card.id} $variant", it) }
                 .getOrDefault(false)
-            val deleted = if (looseDeleted) {
-                true
-            } else {
-                runCatching { sessionRepository.removeOneByCardVariant(card.id, variant.name) }
-                    .onFailure { Log.e(TAG, "Pack remove failed for ${card.id} $variant", it) }
-                    .getOrDefault(false)
-            }
             if (deleted) {
                 _events.emit(CollectionEvent.RemoveSucceeded(card.name))
             } else {
                 _events.emit(CollectionEvent.RemoveNotFound(card.name))
             }
-            refresh()
+        }
+    }
+
+    fun submitPendingPrices() {
+        if (_submitInFlight.value) return
+        _submitInFlight.value = true
+        viewModelScope.launch {
+            val result = runCatching {
+                sessionRepository.submitPendingPrices(
+                    pricing = app.pricing,
+                    sessionId = null,
+                    onProgress = {
+                        _pricingProgress.value = "Pricing batch ${it.currentBatch} of ${it.totalBatches}"
+                    },
+                )
+            }
+            _submitInFlight.value = false
+            _pricingProgress.value = null
+            result
+                .onSuccess { submit ->
+                    when (submit) {
+                        SessionRepository.SubmitResult.Empty ->
+                            _events.emit(CollectionEvent.SubmitCompleted(0, 0, 0))
+                        is SessionRepository.SubmitResult.Done ->
+                            _events.emit(
+                                CollectionEvent.SubmitCompleted(
+                                    priced = submit.priced,
+                                    failed = submit.failed,
+                                    unpriceable = submit.unpriceable,
+                                ),
+                            )
+                    }
+                }
+                .onFailure {
+                    Log.e(TAG, "Submit pending failed", it)
+                    _events.emit(CollectionEvent.SubmitFailed(it.message ?: "pricing failed"))
+                }
         }
     }
 
     fun exportToJson() {
         val snapshot = state.value
         viewModelScope.launch {
-            val looseSnapshot = runCatching { looseScanRepository.getAllForExport() }
-                .getOrDefault(emptyList())
-            val path = runCatching { writeExport(snapshot, looseSnapshot) }
+            val path = runCatching { writeExport(snapshot) }
                 .onFailure { Log.e(TAG, "Export failed", it) }
                 .getOrElse {
                     _events.emit(CollectionEvent.ExportFailed(it.message ?: "Export failed"))
@@ -282,66 +249,100 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private fun aggregate(entries: List<ScannedEntry>): List<CollectionEntry> =
+    private fun buildState(entries: List<ScanSessionEntry>, filter: CollectionFilter): CollectionState {
+        val aggregate = aggregate(entries)
+        val options = CollectionOptions(
+            sets = aggregate.map { it.card.setCode }.distinct().sorted(),
+            domains = aggregate.flatMap { it.domains }.distinct().sorted(),
+            rarities = aggregate.map { it.card.rarity }.distinct().sortedBy { it.ordinal },
+        )
+        val filtered = aggregate.filter { entry ->
+            val q = filter.query.trim().lowercase()
+            val queryOk = q.isBlank() ||
+                entry.card.name.lowercase().contains(q) ||
+                entry.card.collectorNumber.lowercase().contains(q)
+            queryOk &&
+                (!filter.pendingOnly || entry.pendingCount + entry.failedCount + entry.unpriceableCount > 0) &&
+                (filter.variant == null || entry.variant == filter.variant) &&
+                (filter.setCode == null || entry.card.setCode == filter.setCode) &&
+                (filter.rarity == null || entry.card.rarity == filter.rarity) &&
+                (filter.domain == null || filter.domain in entry.domains)
+        }.sortedWith(comparatorFor(filter.sort))
+
+        val groups = groupEntries(filtered, filter.group)
+        return CollectionState(
+            groups = groups,
+            totalValue = aggregate.sumOf { it.totalMarketValue },
+            totalCards = aggregate.sumOf { it.quantity },
+            uniqueCards = aggregate.map { it.card.id }.distinct().size,
+            pendingPriceCount = aggregate.sumOf { it.pendingCount + it.failedCount },
+            filter = filter,
+            options = options,
+            isLoading = false,
+        )
+    }
+
+    private fun aggregate(entries: List<ScanSessionEntry>): List<CollectionEntry> =
         entries
             .groupBy { it.card.id to it.variant }
             .map { (_, group) ->
                 val card = group.first().card
                 val variant = group.first().variant
-                // Pick the most recently-priced entry in the group as the
-                // representative unit price; if nothing is priced yet, fall
-                // back to 0 so the row still appears in the list.
-                val unitPrice = group
+                val latestPrice = group
                     .filter { it.price != null }
                     .maxByOrNull { it.price!!.lastUpdated }
-                    ?.price?.marketPrice
-                    ?: 0.0
-                // Loose-scan entries are tagged "loose-<rowid>" by
-                // LooseScanRepository; everything else is a pack scan.
-                val looseQty = group.count { it.id.startsWith("loose-") }
+                    ?.price
                 CollectionEntry(
                     card = card,
                     variant = variant,
                     quantity = group.size,
-                    unitPrice = unitPrice,
+                    unitPrice = latestPrice?.marketPrice ?: 0.0,
                     totalMarketValue = group.sumOf { it.marketPrice },
-                    looseQuantity = looseQty,
-                    packQuantity = group.size - looseQty,
-                    hasPendingPrice = group.any { it.price == null },
+                    pendingCount = group.count { it.pricingStatus == PricingStatus.PENDING },
+                    failedCount = group.count { it.pricingStatus == PricingStatus.FAILED },
+                    unpriceableCount = group.count { it.pricingStatus == PricingStatus.UNPRICEABLE },
+                    latestScannedAt = group.maxOf { it.scannedAt },
+                    domains = card.domains,
                 )
             }
 
-    private fun applyFilter(
-        entries: List<CollectionEntry>,
-        filter: CollectionFilter,
-    ): List<CollectionEntry> {
-        val allowedVariants: Set<Variant> = when {
-            filter.foilOnly && filter.signatureOnly -> setOf(Variant.FOIL, Variant.SIGNATURE)
-            filter.foilOnly -> setOf(Variant.FOIL)
-            filter.signatureOnly -> setOf(Variant.SIGNATURE)
-            else -> Variant.entries.toSet()
-        }
-        val nameQuery = filter.nameQuery.trim().lowercase()
-        return entries.filter { entry ->
-            entry.variant in allowedVariants &&
-                (filter.selectedRarities.isEmpty() || entry.card.rarity in filter.selectedRarities) &&
-                (!filter.looseOnly || entry.looseQuantity > 0) &&
-                (nameQuery.isEmpty() || entry.card.name.lowercase().contains(nameQuery))
-        }
+    private fun comparatorFor(sort: CollectionSort): Comparator<CollectionEntry> = when (sort) {
+        CollectionSort.NAME -> compareBy { it.card.name.lowercase() }
+        CollectionSort.SET -> compareBy<CollectionEntry> { it.card.setCode }.thenBy { it.card.collectorNumber }
+        CollectionSort.COLLECTOR -> compareBy<CollectionEntry> { it.card.collectorNumber }
+        CollectionSort.RARITY -> compareBy<CollectionEntry> { it.card.rarity.ordinal }.thenBy { it.card.name }
+        CollectionSort.DOMAIN -> compareBy<CollectionEntry> { it.domains.firstOrNull().orEmpty() }.thenBy { it.card.name }
+        CollectionSort.QUANTITY -> compareByDescending<CollectionEntry> { it.quantity }.thenBy { it.card.name }
+        CollectionSort.VALUE -> compareByDescending<CollectionEntry> { it.totalMarketValue }.thenBy { it.card.name }
+        CollectionSort.RECENT -> compareByDescending<CollectionEntry> { it.latestScannedAt }.thenBy { it.card.name }
     }
 
-    private suspend fun writeExport(
-        state: CollectionState,
-        looseEntries: List<ScannedEntry>,
-    ): String = withContext(Dispatchers.IO) {
+    private fun groupEntries(entries: List<CollectionEntry>, groupMode: CollectionGroupMode): List<CollectionGroup> {
+        val grouped = when (groupMode) {
+            CollectionGroupMode.SET -> entries.groupBy { it.card.setCode }
+            CollectionGroupMode.RARITY -> entries.groupBy { it.card.rarity.name.lowercase().replaceFirstChar { c -> c.uppercase() } }
+            CollectionGroupMode.DOMAIN -> entries.groupBy { it.domains.firstOrNull() ?: "No domain" }
+            CollectionGroupMode.VARIANT -> entries.groupBy { it.variant.name.lowercase().replaceFirstChar { c -> c.uppercase() } }
+            CollectionGroupMode.NONE -> mapOf("All cards" to entries)
+        }
+        return grouped.map { (title, list) ->
+            CollectionGroup(
+                title = title,
+                entries = list,
+                totalValue = list.sumOf { it.totalMarketValue },
+                totalCards = list.sumOf { it.quantity },
+            )
+        }.sortedBy { it.title }
+    }
+
+    private suspend fun writeExport(state: CollectionState): String = withContext(Dispatchers.IO) {
         val context = getApplication<Application>()
-        val dir = context.getExternalFilesDir(null)
-            ?: error("External files dir unavailable")
-        val timestamp = LocalDateTime.now()
-            .format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+        val dir = context.getExternalFilesDir(null) ?: error("External files dir unavailable")
+        val timestamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
+            .withZone(ZoneOffset.UTC)
+            .format(Instant.now())
         val file = File(dir, "collection-$timestamp.json")
-        val payload = state.toExportPayload(looseEntries)
-        file.writeText(exportJson.encodeToString(ExportPayload.serializer(), payload))
+        file.writeText(exportJson.encodeToString(ExportPayload.serializer(), state.toExportPayload()))
         file.absolutePath
     }
 
@@ -356,30 +357,11 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
 @Serializable
 private data class ExportPayload(
     @SerialName("exported_at") val exportedAt: String,
-    @SerialName("total_value") val totalValue: Double,
+    @SerialName("total_value_usd") val totalValueUsd: Double,
     @SerialName("total_cards") val totalCards: Int,
-    val sets: List<SetGroupExport>,
-    @SerialName("loose_scans") val looseScans: List<LooseScanExport> = emptyList(),
-)
-
-@Serializable
-private data class LooseScanExport(
-    val id: String,
-    @SerialName("card_id") val cardId: String,
-    val name: String,
-    @SerialName("set_code") val setCode: String,
-    @SerialName("collector_number") val collectorNumber: String,
-    val rarity: String,
-    val variant: String,
-    @SerialName("market_price") val marketPrice: Double,
-    @SerialName("scanned_at") val scannedAt: String,
-)
-
-@Serializable
-private data class SetGroupExport(
-    @SerialName("set_code") val setCode: String,
-    @SerialName("total_value") val totalValue: Double,
-    val entries: List<EntryExport>,
+    @SerialName("unique_cards") val uniqueCards: Int,
+    @SerialName("pending_prices") val pendingPrices: Int,
+    val collection: List<EntryExport>,
 )
 
 @Serializable
@@ -389,38 +371,23 @@ private data class EntryExport(
     @SerialName("set_code") val setCode: String,
     @SerialName("collector_number") val collectorNumber: String,
     val rarity: String,
+    val domains: List<String>,
     val variant: String,
     val quantity: Int,
-    @SerialName("unit_price") val unitPrice: Double,
-    @SerialName("total_value") val totalValue: Double,
+    @SerialName("unit_price_usd") val unitPriceUsd: Double,
+    @SerialName("total_value_usd") val totalValueUsd: Double,
+    @SerialName("pending_count") val pendingCount: Int,
+    @SerialName("failed_count") val failedCount: Int,
+    @SerialName("unpriceable_count") val unpriceableCount: Int,
 )
 
-private fun CollectionState.toExportPayload(
-    looseEntries: List<ScannedEntry>,
-): ExportPayload = ExportPayload(
+private fun CollectionState.toExportPayload(): ExportPayload = ExportPayload(
     exportedAt = Instant.now().atOffset(ZoneOffset.UTC).toString(),
-    totalValue = totalValue,
+    totalValueUsd = totalValue,
     totalCards = totalCards,
-    sets = groups.map { group ->
-        SetGroupExport(
-            setCode = group.setCode,
-            totalValue = group.totalValue,
-            entries = group.entries.map { it.toExport() },
-        )
-    },
-    looseScans = looseEntries.map { entry ->
-        LooseScanExport(
-            id = entry.id,
-            cardId = entry.card.id,
-            name = entry.card.name,
-            setCode = entry.card.setCode,
-            collectorNumber = entry.card.collectorNumber,
-            rarity = entry.card.rarity.name,
-            variant = entry.variant.name,
-            marketPrice = entry.marketPrice,
-            scannedAt = entry.scannedAt.atOffset(ZoneOffset.UTC).toString(),
-        )
-    },
+    uniqueCards = uniqueCards,
+    pendingPrices = pendingPriceCount,
+    collection = groups.flatMap { it.entries }.map { it.toExport() },
 )
 
 private fun CollectionEntry.toExport(): EntryExport = EntryExport(
@@ -429,8 +396,12 @@ private fun CollectionEntry.toExport(): EntryExport = EntryExport(
     setCode = card.setCode,
     collectorNumber = card.collectorNumber,
     rarity = card.rarity.name,
+    domains = domains,
     variant = variant.name,
     quantity = quantity,
-    unitPrice = unitPrice,
-    totalValue = totalMarketValue,
+    unitPriceUsd = unitPrice,
+    totalValueUsd = totalMarketValue,
+    pendingCount = pendingCount,
+    failedCount = failedCount,
+    unpriceableCount = unpriceableCount,
 )

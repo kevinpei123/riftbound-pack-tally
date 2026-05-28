@@ -33,12 +33,10 @@ import androidx.navigation.compose.rememberNavController
 import com.riftbound.packtally.App
 import com.riftbound.packtally.core.pricing.QuotaEvent
 import com.riftbound.packtally.feature.backup.BackupScreen
-import com.riftbound.packtally.feature.box.BoxScreen
 import com.riftbound.packtally.feature.collection.CollectionScreen
 import com.riftbound.packtally.feature.home.HomeScreen
-import com.riftbound.packtally.feature.pack.PackScreen
-import com.riftbound.packtally.feature.quickscan.QuickScanScreen
 import com.riftbound.packtally.feature.scanner.ScannerScreen
+import com.riftbound.packtally.feature.session.CurrentSessionScreen
 import com.riftbound.packtally.feature.settings.SettingsScreen
 
 @Composable
@@ -75,11 +73,6 @@ fun AppNav() {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            // Seven tabs in ~360dp means each slot is only ~51dp wide. Default
-            // M3 label typography (labelMedium, 12sp) wraps to two lines for
-            // even short words on some devices. Drop to labelSmall + maxLines=1
-            // + softWrap=false so labels stay on one line and just clip on
-            // truly long ones instead of pushing the bar taller.
             NavigationBar {
                 Destination.entries.forEach { dest ->
                     val selected = backStackEntry?.destination?.hierarchy
@@ -116,16 +109,20 @@ fun AppNav() {
             composable(Destination.Home.route) {
                 HomeScreen(
                     onNavigateToScanner = { navController.navigateToTab(Destination.Scanner.route) },
+                    onNavigateToCurrent = { navController.navigateToTab(Destination.Current.route) },
+                    onNavigateToCollection = { navController.navigateToTab(Destination.Collection.route) },
                 )
             }
-            composable(Destination.QuickScan.route) { QuickScanScreen() }
-            composable(Destination.Scanner.route) { ScannerScreen() }
-            composable(Destination.Pack.route) {
-                PackScreen(
-                    onNavigateToScanner = { navController.navigateToTab(Destination.Scanner.route) },
+            composable(Destination.Scanner.route) {
+                ScannerScreen(
+                    onNavigateToCurrent = { navController.navigateToTab(Destination.Current.route) },
                 )
             }
-            composable(Destination.Box.route) { BoxScreen() }
+            composable(Destination.Current.route) {
+                CurrentSessionScreen(
+                    onNavigateToScan = { navController.navigateToTab(Destination.Scanner.route) },
+                )
+            }
             composable(Destination.Collection.route) { CollectionScreen() }
             composable(Destination.Settings.route) {
                 SettingsScreen(onNavigateToBackup = { navController.navigate("backup") })

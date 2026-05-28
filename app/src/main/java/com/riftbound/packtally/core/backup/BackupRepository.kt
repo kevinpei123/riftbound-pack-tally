@@ -40,6 +40,10 @@ data class BackupManifest(
 data class BackupPrefsExport(
     val currency: String,
     @SerialName("usd_to_target_rate") val usdToTargetRate: Double,
+    @SerialName("exchange_rate_base") val exchangeRateBase: String,
+    @SerialName("exchange_rate_target") val exchangeRateTarget: String,
+    @SerialName("exchange_rate_fetched_at") val exchangeRateFetchedAt: String?,
+    @SerialName("exchange_rate_source") val exchangeRateSource: String?,
     @SerialName("cache_ttl_hours") val cacheTtlHours: Int,
     @SerialName("force_ocr_preprocessing") val forceOcrPreprocessing: Boolean,
     @SerialName("ocr_debug_logging") val ocrDebugLogging: Boolean,
@@ -239,17 +243,10 @@ class BackupRepository(
     private fun countEntriesQuick(db: SessionDatabase): Int = runCatching {
         var total = 0
         db.openHelper.writableDatabase.query(
-            "SELECT COUNT(*) FROM loose_scans",
+            "SELECT COUNT(*) FROM scan_session_entries",
             arrayOf<Any>(),
         ).use { c ->
             if (c.moveToFirst()) total += c.getInt(0)
-        }
-        // Pack entries live inside entriesJson — approximate by row count of packs.
-        db.openHelper.writableDatabase.query(
-            "SELECT COUNT(*) FROM pack_sessions",
-            arrayOf<Any>(),
-        ).use { c ->
-            if (c.moveToFirst()) total += c.getInt(0) * 14
         }
         total
     }.getOrDefault(0)
@@ -257,10 +254,14 @@ class BackupRepository(
     private fun AppSettings.toBackupExport(): BackupPrefsExport = BackupPrefsExport(
         currency = currency.name,
         usdToTargetRate = usdToTargetRate,
-    cacheTtlHours = cacheTtlHours,
-    forceOcrPreprocessing = forceOcrPreprocessing,
-    ocrDebugLogging = ocrDebugLogging,
-)
+        exchangeRateBase = exchangeRateBase,
+        exchangeRateTarget = exchangeRateTarget,
+        exchangeRateFetchedAt = exchangeRateFetchedAt?.toString(),
+        exchangeRateSource = exchangeRateSource,
+        cacheTtlHours = cacheTtlHours,
+        forceOcrPreprocessing = forceOcrPreprocessing,
+        ocrDebugLogging = ocrDebugLogging,
+    )
 
     companion object {
         const val MANUAL_BACKUP_SUBDIR = "backups"

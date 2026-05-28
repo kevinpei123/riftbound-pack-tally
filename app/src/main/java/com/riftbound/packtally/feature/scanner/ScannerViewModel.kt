@@ -12,24 +12,26 @@ import com.riftbound.packtally.BuildConfig
 import com.riftbound.packtally.core.carddb.CardDatabase
 import com.riftbound.packtally.core.ocr.CardOcrParser
 import com.riftbound.packtally.core.ocr.OcrService
+import com.riftbound.packtally.core.persistence.SessionRepository
 import com.riftbound.packtally.core.settings.SettingsRepository
-import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.RiftboundCard
-import com.riftbound.packtally.model.ScannedEntry
+import com.riftbound.packtally.model.ScanEntrySource
+import com.riftbound.packtally.model.ScanSession
+import com.riftbound.packtally.model.ScanSessionEntry
 import com.riftbound.packtally.model.Variant
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import java.time.Instant
 
 private const val TAG = "ScannerViewModel"
 
 private const val CONFIDENCE_KNOWN_SET = 0.9f
 private const val CONFIDENCE_UNKNOWN_SET = 0.6f
 private const val CONFIDENCE_NAME_FALLBACK = 0.5f
-
 private const val OCR_TIMEOUT_MS = 10_000L
 
 private val KNOWN_SETS = setOf("OGN", "OGS", "ARC", "SFD", "UNL", "FND")
@@ -43,44 +45,55 @@ sealed interface ScanResult {
 }
 
 class ScannerViewModel(
-    private val pack: PackViewModel,
+    private val sessions: SessionRepository,
     private val settings: SettingsRepository,
 ) : ViewModel() {
 
     private val _scanResult = MutableStateFlow<ScanResult>(ScanResult.Idle)
     val scanResult: StateFlow<ScanResult> = _scanResult.asStateFlow()
 
+    private val _rapidMode = MutableStateFlow(false)
+    val rapidMode: StateFlow<Boolean> = _rapidMode.asStateFlow()
+
+    private val _lastAdded = MutableStateFlow<ScanSessionEntry?>(null)
+    val lastAdded: StateFlow<ScanSessionEntry?> = _lastAdded.asStateFlow()
+
+    val activeSession: StateFlow<ScanSession?> =
+        sessions.observeActiveSession().stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = null,
+        )
+
+    fun setRapidMode(value: Boolean) {
+        _rapidMode.value = value
+    }
+
     fun onCardCaptured(bitmap: Bitmap) {
         if (_scanResult.value is ScanResult.Scanning) return
         _scanResult.value = ScanResult.Scanning
         viewModelScope.launch {
-            _scanResult.value = try {
+            val result = try {
                 identify(bitmap)
             } finally {
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
+            if (_rapidMode.value && result is ScanResult.Identified) {
+                saveIdentified(result.card, Variant.STANDARD, result.confidence, ScanEntrySource.RAPID)
+                _scanResult.value = ScanResult.Idle
+            } else {
+                _scanResult.value = result
+            }
         }
     }
 
-    /**
-     * Append the identified card to the active pack with no price attached.
-     * The PackViewModel's Submit action prices the whole pack in one batched
-     * JustTCG call when the user is done filling it. Per-scan pricing would
-     * burn the free-tier quota (~1000 requests/month) very fast.
-     */
     fun recordCard(card: RiftboundCard, variant: Variant) {
         val confidence = (_scanResult.value as? ScanResult.Identified)?.confidence
             ?: CONFIDENCE_NAME_FALLBACK
-        pack.append(
-            ScannedEntry(
-                card = card,
-                variant = variant,
-                price = null,
-                confidence = confidence,
-                scannedAt = Instant.now(),
-            ),
-        )
-        reset()
+        viewModelScope.launch {
+            saveIdentified(card, variant, confidence, ScanEntrySource.OCR)
+            reset()
+        }
     }
 
     fun pickCandidate(card: RiftboundCard) {
@@ -91,22 +104,34 @@ class ScannerViewModel(
         _scanResult.value = ScanResult.Idle
     }
 
+    private suspend fun saveIdentified(
+        card: RiftboundCard,
+        variant: Variant,
+        confidence: Float,
+        source: ScanEntrySource,
+    ) {
+        val entry = sessions.addEntry(
+            card = card,
+            variant = variant,
+            source = source,
+            confidence = confidence,
+        )
+        _lastAdded.value = entry
+    }
+
     private suspend fun identify(bitmap: Bitmap): ScanResult {
         return try {
             val currentSettings = settings.getCurrentSettings()
-            val alwaysPreprocess = currentSettings.forceOcrPreprocessing
-            // OCR call wrapped in withTimeout(10s) so a stuck ML Kit call
-            // can't hang the scan flow indefinitely.
             val blocks = withTimeout(OCR_TIMEOUT_MS) {
-                OcrService.recognize(bitmap, alwaysPreprocess = alwaysPreprocess)
+                OcrService.recognize(
+                    bitmap,
+                    alwaysPreprocess = currentSettings.forceOcrPreprocessing,
+                )
             }
             val parsed = CardOcrParser.parse(blocks)
             val debugLogging = BuildConfig.DEBUG && currentSettings.ocrDebugLogging
             if (debugLogging) {
-                Log.d(
-                    TAG,
-                    "OCR raw='${blocks.joinToString(" | ") { it.text }}' parsed=$parsed",
-                )
+                Log.d(TAG, "OCR raw='${blocks.joinToString(" | ") { it.text }}' parsed=$parsed")
             }
 
             parsed.collectorNumber?.let { number ->
@@ -139,10 +164,10 @@ class ScannerViewModel(
     }
 
     companion object {
-        fun factory(app: App, pack: PackViewModel): ViewModelProvider.Factory = viewModelFactory {
+        fun factory(app: App): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 ScannerViewModel(
-                    pack = pack,
+                    sessions = app.sessionRepository,
                     settings = app.settingsRepository,
                 )
             }

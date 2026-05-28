@@ -51,3 +51,46 @@ data class LooseScanEntity(
      */
     val tcgplayerId: String? = null,
 )
+
+@Entity(tableName = "scan_sessions")
+data class ScanSessionEntity(
+    @PrimaryKey val id: String,
+    val createdAt: Long,
+    val completedAt: Long? = null,
+    val name: String? = null,
+    val status: String,
+)
+
+@Entity(
+    tableName = "scan_session_entries",
+    foreignKeys = [
+        ForeignKey(
+            entity = ScanSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index("sessionId"),
+        Index("cardId"),
+        Index("tcgplayerId"),
+        Index("pricingStatus"),
+        Index("scannedAt"),
+    ],
+)
+data class ScanSessionEntryEntity(
+    @PrimaryKey val id: String,
+    val sessionId: String,
+    val cardId: String,
+    val tcgplayerId: String?,
+    val variant: String,
+    val priceJson: String = "",
+    val pricingStatus: String,
+    val pricingError: String? = null,
+    val scannedAt: Long,
+    val source: String,
+    val confidence: Float = 1.0f,
+    val manuallyCorrected: Boolean = false,
+    val notes: String? = null,
+)

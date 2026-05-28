@@ -38,6 +38,27 @@ class PricingRepositoryTest {
     }
 
     @Test
+    fun `pricing batch boundaries split at twenty`() = runBlocking {
+        val cases = listOf(
+            0 to emptyList(),
+            1 to listOf(1),
+            18 to listOf(18),
+            20 to listOf(20),
+            21 to listOf(20, 1),
+            46 to listOf(20, 20, 6),
+            100 to listOf(20, 20, 20, 20, 20),
+        )
+
+        cases.forEach { (count, expected) ->
+            val client = FakeJustTcgClient()
+            val repo = JustTcgPricingRepository(client)
+            repo.priceMany((1..count).map { PriceRequest("$it", Variant.STANDARD) })
+
+            assertEquals(expected, client.posts.map { it.size }, "count=$count")
+        }
+    }
+
+    @Test
     fun `same tcgplayer id with different variants gets different cached and network results`() = runBlocking {
         val client = FakeJustTcgClient()
         val repo = JustTcgPricingRepository(client)

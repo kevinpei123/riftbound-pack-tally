@@ -23,6 +23,8 @@ data class RiftboundCard(
     val hasAlternateArt: Boolean = false,
     /** Optional image URL from Riftcodex media block, useful in correction sheet. */
     val imageUrl: String? = null,
+    /** Riftbound color/domain labels from `classification.domain[]`, if present. */
+    val domains: List<String> = emptyList(),
 )
 
 @Serializable

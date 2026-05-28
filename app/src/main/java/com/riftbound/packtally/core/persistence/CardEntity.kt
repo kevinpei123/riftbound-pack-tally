@@ -26,6 +26,7 @@ data class CardEntity(
     @ColumnInfo(index = true) val tcgplayerId: String,
     val hasAlternateArt: Boolean = false,
     val imageUrl: String? = null,
+    val domains: String = "",
 )
 
 @Dao

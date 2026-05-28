@@ -119,6 +119,11 @@ class CardDbSync(
             tcgplayerId = tcg,
             hasAlternateArt = metadata?.alternateArt == true,
             imageUrl = media?.imageUrl,
+            domains = classification?.domain
+                ?.map { it.trim() }
+                ?.filter { it.isNotBlank() }
+                ?.joinToString("|")
+                .orEmpty(),
         )
     }
 
@@ -140,6 +145,7 @@ fun CardEntity.toRiftboundCard(): com.riftbound.packtally.model.RiftboundCard =
         tcgplayerId = tcgplayerId,
         hasAlternateArt = hasAlternateArt,
         imageUrl = imageUrl,
+        domains = domains.split('|').map { it.trim() }.filter { it.isNotBlank() },
     )
 
 private fun parseRarity(s: String): Rarity = when (s.lowercase()) {

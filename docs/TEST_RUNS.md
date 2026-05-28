@@ -1,5 +1,35 @@
 # Test Runs
 
+## 2026-05-27 Scan Session Redesign
+
+Host: Windows / PowerShell
+
+| Command | Result | Notes |
+|---|---:|---|
+| `git status --short --branch` | PASS | Started clean except later generated build files. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache :app:compileDebugKotlin --rerun-tasks --stacktrace` | PASS | Forced main Kotlin compile after redesign. 5m34s. Warnings only, then fixed coroutine/icon warnings. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache test` | PASS | Full unit test task returned exit code 0 after adding session/pricing/currency tests. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache lint` | PASS | Lint report generated. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache assembleDebug` | PASS | Rebuilt after `clean`; latest APK is 80,378,705 bytes / 76.66 MiB. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache connectedAndroidTest` | PASS | Ran on VOG-L09 Android 10; no Android test sources, task completed. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache test lint assembleDebug connectedAndroidTest` | PASS | Final rerun after the backup manifest count fix. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache :app:dependencies --configuration debugRuntimeClasspath` | PASS | Dependency report generated. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache clean` | PASS | Explicit clean step completed. |
+| `adb devices` via SDK platform-tools | PASS | Device `4BF0219427000620` attached. |
+| `adb uninstall com.riftbound.packtally` | PASS | Fresh install QA path. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache installDebug` | PASS | Installed on Huawei VOG-L09 / Android 10. |
+| `adb shell am start -W -n com.riftbound.packtally/.MainActivity` | PASS | Fresh cold start `TotalTime 1833ms`; synced cold start after fix `TotalTime 1561ms`. |
+| Filtered logcat | PASS | Frankfurter USD->AUD refresh succeeded once, Riftcodex sync completed 1064 cards in about 13.9s, later synced launch made no Riftcodex/currency network calls. |
+
+Notes:
+
+- Initial Gradle invocations timed out because daemon output did not flush before
+  the tool timeout; stale Java/Gradle processes were stopped before rerunning.
+- A final `adb devices -l` check returned an empty device list, so no additional
+  phone smoke run was possible after the final code cleanup.
+- No device smoke test has been completed yet for the redesign pass.
+- Manual camera/OCR card scans still need physical-card validation.
+
 Date: 2026-05-26
 Host: Windows / PowerShell
 Device: Huawei VOG-L09, Android 10, ABI `arm64-v8a`, adb id `4BF0219427000620`
@@ -27,7 +57,7 @@ Device: Huawei VOG-L09, Android 10, ABI `arm64-v8a`, adb id `4BF0219427000620`
 |---|---:|---|
 | `./gradlew clean` | PASS | 45.7s after build-script changes. |
 | `./gradlew test lint assembleDebug connectedAndroidTest` | PASS | Final combined verification in 3m54s; report at `app/build/reports/lint-results-debug.html`. |
-| Debug APK size check | PASS | Final debug APK 81,211,212 bytes / 77.45 MiB. |
+| Debug APK size check | PASS | Final debug APK 80,378,705 bytes / 76.66 MiB after the scan-session rebuild. |
 | `./gradlew :app:dependencies --configuration debugRuntimeClasspath` | PASS | Dependency report generated successfully. |
 | `adb uninstall com.riftbound.packtally` | PASS | Fresh install QA run. |
 | `./gradlew installDebug` | PASS | Installed final APK. |

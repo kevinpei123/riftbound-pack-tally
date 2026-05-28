@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.riftbound.packtally.App
 import com.riftbound.packtally.core.carddb.CardDbSync
+import com.riftbound.packtally.core.currency.CurrencyRateRepository
 import com.riftbound.packtally.core.pricing.CachedPricingRepository
 import com.riftbound.packtally.core.pricing.QuotaState
 import com.riftbound.packtally.core.pricing.QuotaTracker
@@ -32,6 +33,8 @@ sealed interface SettingsEvent {
     data object ResetComplete : SettingsEvent
     data class CardDbResynced(val cardCount: Int) : SettingsEvent
     data class CardDbResyncFailed(val reason: String) : SettingsEvent
+    data class ExchangeRateUpdated(val target: String) : SettingsEvent
+    data class ExchangeRateFailed(val reason: String) : SettingsEvent
 }
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -41,6 +44,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val cachedPricing: CachedPricingRepository = app.cachedPricing
     private val quotaTracker: QuotaTracker = app.quotaTracker
     private val cardDbSync: CardDbSync = app.cardDbSync
+    private val currencyRates: CurrencyRateRepository = app.currencyRateRepository
 
     val settings: StateFlow<AppSettings> =
         settingsRepository.settings.stateIn(
@@ -64,6 +68,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val _cardDbSyncing = MutableStateFlow(false)
     val cardDbSyncing: StateFlow<Boolean> = _cardDbSyncing.asStateFlow()
+
+    private val _exchangeRateRefreshing = MutableStateFlow(false)
+    val exchangeRateRefreshing: StateFlow<Boolean> = _exchangeRateRefreshing.asStateFlow()
 
     private val _events = MutableSharedFlow<SettingsEvent>()
     val events: SharedFlow<SettingsEvent> = _events.asSharedFlow()
@@ -89,11 +96,26 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setCurrency(currency: Currency) {
-        viewModelScope.launch { settingsRepository.setCurrency(currency) }
+        viewModelScope.launch {
+            _exchangeRateRefreshing.value = true
+            val result = currencyRates.setCurrencyAndRefresh(currency)
+            _exchangeRateRefreshing.value = false
+            emitExchangeRateResult(result)
+        }
     }
 
     fun setConversionRate(rate: Double) {
         viewModelScope.launch { settingsRepository.setConversionRate(rate) }
+    }
+
+    fun refreshExchangeRate() {
+        if (_exchangeRateRefreshing.value) return
+        _exchangeRateRefreshing.value = true
+        viewModelScope.launch {
+            val result = currencyRates.refreshNow()
+            _exchangeRateRefreshing.value = false
+            emitExchangeRateResult(result)
+        }
     }
 
     fun setCacheTtlHours(hours: Int) {
@@ -152,6 +174,17 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     Log.e(TAG, "Card DB resync failed", exc)
                     _events.emit(SettingsEvent.CardDbResyncFailed(exc.message ?: "resync failed"))
                 }
+        }
+    }
+
+    private suspend fun emitExchangeRateResult(result: CurrencyRateRepository.RefreshResult) {
+        when (result) {
+            is CurrencyRateRepository.RefreshResult.Fresh ->
+                _events.emit(SettingsEvent.ExchangeRateUpdated(result.target))
+            is CurrencyRateRepository.RefreshResult.Updated ->
+                _events.emit(SettingsEvent.ExchangeRateUpdated(result.target))
+            is CurrencyRateRepository.RefreshResult.Failed ->
+                _events.emit(SettingsEvent.ExchangeRateFailed(result.reason))
         }
     }
 }

@@ -1,10 +1,11 @@
 package com.riftbound.packtally.feature.scanner
 
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -13,6 +14,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -25,7 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.App
-import com.riftbound.packtally.feature.pack.PackViewModel
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.Variant
 
@@ -33,20 +35,60 @@ private const val RESCAN_THRESHOLD = 0.7f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScannerScreen() {
-    val activity = LocalContext.current as ComponentActivity
-    val app = activity.application as App
-
-    val packVm: PackViewModel = viewModel(viewModelStoreOwner = activity)
-    val factory = remember(app, packVm) { ScannerViewModel.factory(app, packVm) }
+fun ScannerScreen(onNavigateToCurrent: () -> Unit = {}) {
+    val app = LocalContext.current.applicationContext as App
+    val factory = remember(app) { ScannerViewModel.factory(app) }
     val scannerVm: ScannerViewModel = viewModel(factory = factory)
 
     val result by scannerVm.scanResult.collectAsStateWithLifecycle()
+    val rapidMode by scannerVm.rapidMode.collectAsStateWithLifecycle()
+    val activeSession by scannerVm.activeSession.collectAsStateWithLifecycle()
+    val lastAdded by scannerVm.lastAdded.collectAsStateWithLifecycle()
 
-    CameraScreen(onCardCaptured = scannerVm::onCardCaptured)
+    Box(modifier = Modifier.fillMaxSize()) {
+        CameraScreen(onCardCaptured = scannerVm::onCardCaptured)
+
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .padding(12.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            tonalElevation = 2.dp,
+        ) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text("Scan", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "${activeSession?.totalCards ?: 0} cards - ${activeSession?.pendingPriceCount ?: 0} pending",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Rapid", style = MaterialTheme.typography.bodySmall)
+                        Switch(checked = rapidMode, onCheckedChange = scannerVm::setRapidMode)
+                    }
+                }
+                lastAdded?.let {
+                    Text(
+                        "Last added: ${it.card.name} (${it.variant.name.lowercase().replaceFirstChar { c -> c.uppercase() }})",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                OutlinedButton(onClick = onNavigateToCurrent, modifier = Modifier.fillMaxWidth()) {
+                    Text("Current session")
+                }
+            }
+        }
+    }
 
     val showSheet = result !is ScanResult.Idle && result !is ScanResult.Scanning
-
     if (showSheet) {
         ModalBottomSheet(onDismissRequest = scannerVm::reset) {
             when (val r = result) {
@@ -70,6 +112,7 @@ fun ScannerScreen() {
         }
     }
 }
+
 @Composable
 private fun IdentifiedContent(
     card: RiftboundCard,
@@ -85,7 +128,7 @@ private fun IdentifiedContent(
         Text(card.name, style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "${card.setCode}-${card.collectorNumber} • " +
+            text = "${card.collectorNumber} - " +
                 card.rarity.name.lowercase().replaceFirstChar { it.uppercase() },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -131,10 +174,7 @@ private fun AmbiguousContent(
             .fillMaxWidth()
             .padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
-        Text(
-            "Multiple possible matches — tap one",
-            style = MaterialTheme.typography.titleMedium,
-        )
+        Text("Multiple possible matches", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(12.dp))
         candidates.forEach { card ->
             TextButton(
@@ -144,7 +184,7 @@ private fun AmbiguousContent(
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(card.name, style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "${card.setCode}-${card.collectorNumber}",
+                        card.collectorNumber,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -177,9 +217,15 @@ private fun FailedContent(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Retry with the collector number inside the guide, reduce glare, or add the card manually from Current.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Spacer(Modifier.height(24.dp))
         Button(onClick = onRescan, modifier = Modifier.fillMaxWidth()) {
-            Text("Re-scan")
+            Text("Retry")
         }
         Spacer(Modifier.height(16.dp))
     }

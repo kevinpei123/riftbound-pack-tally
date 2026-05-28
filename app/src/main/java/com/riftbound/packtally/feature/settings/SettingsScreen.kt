@@ -11,13 +11,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -41,13 +41,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.riftbound.packtally.BuildConfig
-import com.riftbound.packtally.core.settings.AppSettings
 import com.riftbound.packtally.core.pricing.QuotaState
+import com.riftbound.packtally.core.settings.AppSettings
 import com.riftbound.packtally.core.settings.Currency
 import java.time.Duration
 import java.time.Instant
@@ -64,6 +63,7 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
     val cardDbLastSyncedAt by vm.cardDbLastSyncedAt.collectAsStateWithLifecycle()
     val cardCount by vm.cardCount.collectAsStateWithLifecycle()
     val cardDbSyncing by vm.cardDbSyncing.collectAsStateWithLifecycle()
+    val exchangeRateRefreshing by vm.exchangeRateRefreshing.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showResetDialog by remember { mutableStateOf(false) }
 
@@ -75,7 +75,9 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
                 SettingsEvent.CacheCleared -> "Cache cleared"
                 SettingsEvent.ResetComplete -> "All data reset"
                 is SettingsEvent.CardDbResynced -> "Synced ${event.cardCount} cards"
-                is SettingsEvent.CardDbResyncFailed -> "Re-sync failed — ${event.reason}"
+                is SettingsEvent.CardDbResyncFailed -> "Re-sync failed - ${event.reason}"
+                is SettingsEvent.ExchangeRateUpdated -> "Exchange rate updated for ${event.target}"
+                is SettingsEvent.ExchangeRateFailed -> "Exchange rate refresh failed - ${event.reason}"
             }
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
@@ -90,15 +92,13 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
     ) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall)
 
-        ApiKeySection(
-            settings = settings,
-            onChange = vm::setApiKey,
-        )
+        ApiKeySection(settings = settings, onChange = vm::setApiKey)
 
         CurrencySection(
             settings = settings,
+            refreshing = exchangeRateRefreshing,
             onCurrencyChange = vm::setCurrency,
-            onRateChange = vm::setConversionRate,
+            onRefresh = vm::refreshExchangeRate,
         )
 
         CardDatabaseSection(
@@ -115,10 +115,7 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
             onResetCounter = vm::resetQuotaCounter,
         )
 
-        CacheTtlSection(
-            ttlHours = settings.cacheTtlHours,
-            onChange = vm::setCacheTtlHours,
-        )
+        CacheTtlSection(ttlHours = settings.cacheTtlHours, onChange = vm::setCacheTtlHours)
 
         OcrPreprocessingSection(
             enabled = settings.forceOcrPreprocessing,
@@ -132,19 +129,15 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
             )
         }
 
-        ClearCacheRow(
-            cacheSizeBytes = cacheSize,
-            onClearCache = vm::clearCache,
-        )
+        OutlinedButton(onClick = vm::clearCache, modifier = Modifier.fillMaxWidth()) {
+            Text("Clear price cache (${formatBytes(cacheSize)})")
+        }
 
-        OutlinedButton(
-            onClick = onNavigateToBackup,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Backups & restore →") }
+        OutlinedButton(onClick = onNavigateToBackup, modifier = Modifier.fillMaxWidth()) {
+            Text("Backups and restore")
+        }
 
-        Spacer(Modifier.height(8.dp))
         HorizontalDivider()
-
         DangerZone(onResetTap = { showResetDialog = true })
     }
 
@@ -154,8 +147,8 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
             title = { Text("Reset all data?") },
             text = {
                 Text(
-                    "Permanently deletes all scanned sessions, the price cache, " +
-                        "and saved settings.\n\nThis cannot be undone.",
+                    "Permanently deletes scan sessions, synced cards, price cache, and saved settings. " +
+                        "This cannot be undone.",
                 )
             },
             confirmButton = {
@@ -164,27 +157,20 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
                         showResetDialog = false
                         vm.resetAll()
                     },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error,
-                    ),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text("Reset") }
             },
-            dismissButton = {
-                TextButton(onClick = { showResetDialog = false }) { Text("Cancel") }
-            },
+            dismissButton = { TextButton(onClick = { showResetDialog = false }) { Text("Cancel") } },
         )
     }
 }
 
 @Composable
-private fun ApiKeySection(
-    settings: AppSettings,
-    onChange: (String?) -> Unit,
-) {
+private fun ApiKeySection(settings: AppSettings, onChange: (String?) -> Unit) {
     val currentKey = settings.apiKey ?: ""
     var input by remember(currentKey) { mutableStateOf(currentKey) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         SectionLabel("JustTCG API key")
         OutlinedTextField(
             value = input,
@@ -192,7 +178,7 @@ private fun ApiKeySection(
                 input = it
                 onChange(it)
             },
-            placeholder = { Text("tcg_…") },
+            placeholder = { Text("tcg_...") },
             singleLine = true,
             isError = input.isNotBlank() && !input.startsWith("tcg_"),
             supportingText = {
@@ -203,8 +189,7 @@ private fun ApiKeySection(
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "Get a free key at justtcg.com — 1,000 requests/month, 100/day, no credit card. " +
-                "Saved in DataStore as plain text. Personal-use only.",
+            "Used only when you explicitly submit prices. The key is not exported in backups.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -215,68 +200,48 @@ private fun ApiKeySection(
 @Composable
 private fun CurrencySection(
     settings: AppSettings,
+    refreshing: Boolean,
     onCurrencyChange: (Currency) -> Unit,
-    onRateChange: (Double) -> Unit,
+    onRefresh: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionLabel("Currency")
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             Currency.entries.forEachIndexed { index, currency ->
                 SegmentedButton(
-                    shape = SegmentedButtonDefaults.itemShape(
-                        index = index,
-                        count = Currency.entries.size,
-                    ),
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = Currency.entries.size),
                     selected = settings.currency == currency,
                     onClick = { onCurrencyChange(currency) },
                 ) { Text(currency.code) }
             }
         }
-        if (settings.currency != Currency.USD) {
-            val currentRate = settings.usdToTargetRate
-            var rateInput by remember(currentRate) {
-                mutableStateOf("%.4f".format(currentRate))
-            }
-            OutlinedTextField(
-                value = rateInput,
-                onValueChange = {
-                    rateInput = it
-                    it.toDoubleOrNull()?.let(onRateChange)
-                },
-                label = { Text("USD → ${settings.currency.code} rate") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                "Hard-coded rate — update manually when it drifts.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun CacheTtlSection(
-    ttlHours: Int,
-    onChange: (Int) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SectionLabel("Cache TTL — $ttlHours hour" + if (ttlHours == 1) "" else "s")
-        Slider(
-            value = ttlHours.toFloat(),
-            onValueChange = { onChange(it.roundToInt()) },
-            // 1..24h range — JustTCG refreshes ~4h, so anything past 24h
-            // shows stale prices. Default 6h.
-            valueRange = 1f..24f,
-            steps = 22,
-        )
+        val fetched = settings.exchangeRateFetchedAt?.let(::formatTimestamp) ?: "never"
         Text(
-            "Prices cached longer than this expire and refetch from JustTCG.",
+            "USD to ${settings.currency.code}: ${"%.4f".format(settings.usdToTargetRate)}. " +
+                "Last updated $fetched from ${settings.exchangeRateSource ?: "no source"}.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        settings.exchangeRateWarning?.let {
+            Text(
+                "Using cached rate. Last refresh failed: $it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        OutlinedButton(
+            onClick = onRefresh,
+            enabled = !refreshing,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (refreshing) {
+                CircularProgressIndicator(modifier = Modifier.height(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("Refreshing")
+            } else {
+                Text("Refresh exchange rate")
+            }
+        }
     }
 }
 
@@ -289,17 +254,12 @@ private fun CardDatabaseSection(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("Card database", style = MaterialTheme.typography.titleMedium)
-            val syncedLabel = lastSyncedAt
-                ?.let { "last synced ${formatTimestamp(it)}" }
-                ?: "not yet synced"
             Text(
-                "$cardCount cards · $syncedLabel",
+                "$cardCount cards - ${lastSyncedAt?.let(::formatTimestamp) ?: "not synced"}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -309,28 +269,15 @@ private fun CardDatabaseSection(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (isSyncing) {
-                    androidx.compose.material3.CircularProgressIndicator(
-                        modifier = Modifier.height(16.dp),
-                        strokeWidth = 2.dp,
-                    )
+                    CircularProgressIndicator(modifier = Modifier.height(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("Re-syncing…")
+                    Text("Re-syncing")
                 } else {
                     Text("Re-sync from Riftcodex")
                 }
             }
-            Text(
-                "Use this before box day or when a newly released set is missing.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
-}
-
-private fun formatTimestamp(t: Instant): String {
-    val zoned = t.atZone(java.time.ZoneId.systemDefault())
-    return zoned.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
 }
 
 @Composable
@@ -345,39 +292,15 @@ private fun QuotaCard(
         quota.monthlyPercentUsed >= 0.80f -> MaterialTheme.colorScheme.tertiaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = tone),
-    ) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = tone)) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text("JustTCG quota", style = MaterialTheme.typography.titleMedium)
-            QuotaRow(
-                label = "Monthly",
-                used = quota.monthlyUsed,
-                limit = quota.monthlyLimit,
-                resetsAt = quota.resetsAt,
-                resetLabel = "next billing reset",
-            )
-            QuotaRow(
-                label = "Today",
-                used = quota.dailyUsed,
-                limit = quota.dailyLimit,
-                resetsAt = quota.dailyResetsAt,
-                resetLabel = "UTC midnight",
-            )
-            QuotaRow(
-                label = "This minute",
-                used = quota.minuteUsed,
-                limit = quota.minuteLimit,
-                resetsAt = quota.minuteResetsAt,
-                resetLabel = "next minute",
-            )
-
+            QuotaRow("Monthly", quota.monthlyUsed, quota.monthlyLimit, quota.resetsAt)
+            QuotaRow("Today", quota.dailyUsed, quota.dailyLimit, quota.dailyResetsAt)
+            QuotaRow("This minute", quota.minuteUsed, quota.minuteLimit, quota.minuteResetsAt)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -386,60 +309,83 @@ private fun QuotaCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Cache-only mode", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        "Block all network calls for this session. Cached prices " +
-                            "still load. Auto-clears on app restart or UTC midnight.",
+                        "Blocks pricing network calls; cached prices still display.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Switch(checked = useCachedOnly, onCheckedChange = onToggleCachedOnly)
             }
-
-            OutlinedButton(
-                onClick = onResetCounter,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Reset counter (debug)") }
+            if (BuildConfig.DEBUG) {
+                OutlinedButton(onClick = onResetCounter, modifier = Modifier.fillMaxWidth()) {
+                    Text("Reset quota counter")
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun QuotaRow(
-    label: String,
-    used: Int,
-    limit: Int,
-    resetsAt: Instant,
-    resetLabel: String,
-) {
+private fun QuotaRow(label: String, used: Int, limit: Int, resetsAt: Instant) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        androidx.compose.foundation.layout.Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("$label: $used / $limit", style = MaterialTheme.typography.bodyMedium)
             Text(
-                "in ${formatDurationUntil(resetsAt)} ($resetLabel)",
+                "resets in ${formatDurationUntil(resetsAt)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        val pct = if (limit == 0) 0f else (used.toFloat() / limit).coerceIn(0f, 1f)
-        LinearProgressIndicator(progress = { pct }, modifier = Modifier.fillMaxWidth())
+        LinearProgressIndicator(
+            progress = { if (limit == 0) 0f else (used.toFloat() / limit).coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
-private fun formatDurationUntil(target: Instant): String {
-    val now = Instant.now()
-    if (!now.isBefore(target)) return "00:00"
-    val d = Duration.between(now, target)
-    val hours = d.toHours()
-    val minutes = d.toMinutes() % 60
-    return "%02d:%02d".format(hours, minutes)
+@Composable
+private fun CacheTtlSection(ttlHours: Int, onChange: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SectionLabel("Price cache TTL - $ttlHours hour${if (ttlHours == 1) "" else "s"}")
+        Slider(
+            value = ttlHours.toFloat(),
+            onValueChange = { onChange(it.roundToInt()) },
+            valueRange = 1f..24f,
+            steps = 22,
+        )
+        Text(
+            "Cache hits do not burn JustTCG quota.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable
-private fun OcrPreprocessingSection(
-    enabled: Boolean,
+private fun OcrPreprocessingSection(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    ToggleRow(
+        title = "Force OCR preprocessing",
+        description = "Always apply grayscale and contrast before ML Kit.",
+        checked = enabled,
+        onChange = onChange,
+    )
+}
+
+@Composable
+private fun OcrDebugLoggingSection(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    ToggleRow(
+        title = "OCR debug logging",
+        description = "Debug builds only. Logs raw OCR and parser decisions.",
+        checked = enabled,
+        onChange = onChange,
+    )
+}
+
+@Composable
+private fun ToggleRow(
+    title: String,
+    description: String,
+    checked: Boolean,
     onChange: (Boolean) -> Unit,
 ) {
     Row(
@@ -448,52 +394,14 @@ private fun OcrPreprocessingSection(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            SectionLabel("Force OCR preprocessing")
+            SectionLabel(title)
             Text(
-                "Always apply grayscale + 1.5× contrast before scanning. Helps " +
-                    "with foil / signature glare. Otsu binarization still kicks in " +
-                    "automatically when a scan returns low-confidence blocks.",
+                description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = enabled, onCheckedChange = onChange)
-    }
-}
-
-@Composable
-private fun OcrDebugLoggingSection(
-    enabled: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            SectionLabel("OCR debug logging")
-            Text(
-                "Debug builds only. Logs raw OCR text, parsed collector candidate, " +
-                    "confidence path, and lookup method to logcat.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Switch(checked = enabled, onCheckedChange = onChange)
-    }
-}
-
-@Composable
-private fun ClearCacheRow(
-    cacheSizeBytes: Long,
-    onClearCache: () -> Unit,
-) {
-    OutlinedButton(
-        onClick = onClearCache,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("Clear cache (${formatBytes(cacheSizeBytes)})")
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
@@ -514,21 +422,25 @@ private fun DangerZone(onResetTap: () -> Unit) {
             ),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Reset all data") }
-        Text(
-            "Wipes scanned sessions, the price cache, and saved settings.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
 @Composable
 private fun SectionLabel(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-    )
+    Text(text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+}
+
+private fun formatTimestamp(t: Instant): String =
+    t.atZone(java.time.ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+
+private fun formatDurationUntil(target: Instant): String {
+    val now = Instant.now()
+    if (!now.isBefore(target)) return "00:00"
+    val d = Duration.between(now, target)
+    val hours = d.toHours()
+    val minutes = d.toMinutes() % 60
+    return "%02d:%02d".format(hours, minutes)
 }
 
 private fun formatBytes(bytes: Long): String = when {

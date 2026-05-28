@@ -12,9 +12,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BoxSessionEntity::class,
         PackSessionEntity::class,
         LooseScanEntity::class,
+        ScanSessionEntity::class,
+        ScanSessionEntryEntity::class,
         CardEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class SessionDatabase : RoomDatabase() {
@@ -24,7 +26,7 @@ abstract class SessionDatabase : RoomDatabase() {
     abstract fun cardDao(): CardDao
 
     companion object {
-        const val SESSION_DB_VERSION: Int = 3
+        const val SESSION_DB_VERSION: Int = 4
 
         // v1 → v2 introduced loose_scans.
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -83,15 +85,121 @@ abstract class SessionDatabase : RoomDatabase() {
             }
         }
 
+        // v3 -> v4 introduces scan-session lists. Legacy Pack/Box/loose tables
+        // remain in place for recovery and backup; loose scans are copied into
+        // one completed session so the new Collection can aggregate them.
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS scan_sessions (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        completedAt INTEGER,
+                        name TEXT,
+                        status TEXT NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS scan_session_entries (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        sessionId TEXT NOT NULL,
+                        cardId TEXT NOT NULL,
+                        tcgplayerId TEXT,
+                        variant TEXT NOT NULL,
+                        priceJson TEXT NOT NULL,
+                        pricingStatus TEXT NOT NULL,
+                        pricingError TEXT,
+                        scannedAt INTEGER NOT NULL,
+                        source TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        manuallyCorrected INTEGER NOT NULL,
+                        notes TEXT,
+                        FOREIGN KEY(sessionId) REFERENCES scan_sessions(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_scan_session_entries_sessionId ON scan_session_entries(sessionId)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_scan_session_entries_cardId ON scan_session_entries(cardId)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_scan_session_entries_tcgplayerId ON scan_session_entries(tcgplayerId)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_scan_session_entries_pricingStatus ON scan_session_entries(pricingStatus)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_scan_session_entries_scannedAt ON scan_session_entries(scannedAt)",
+                )
+                db.execSQL("ALTER TABLE cards ADD COLUMN domains TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO scan_sessions(id, createdAt, completedAt, name, status)
+                    SELECT
+                        'legacy-loose',
+                        MIN(scannedAt),
+                        MAX(scannedAt),
+                        'Migrated loose scans',
+                        'COMPLETED'
+                    FROM loose_scans
+                    HAVING COUNT(*) > 0
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO scan_session_entries(
+                        id,
+                        sessionId,
+                        cardId,
+                        tcgplayerId,
+                        variant,
+                        priceJson,
+                        pricingStatus,
+                        pricingError,
+                        scannedAt,
+                        source,
+                        confidence,
+                        manuallyCorrected,
+                        notes
+                    )
+                    SELECT
+                        'legacy-loose-' || id,
+                        'legacy-loose',
+                        cardId,
+                        tcgplayerId,
+                        variant,
+                        COALESCE(priceJson, ''),
+                        CASE
+                            WHEN tcgplayerId IS NULL OR TRIM(tcgplayerId) = '' THEN 'UNPRICEABLE'
+                            WHEN priceJson IS NOT NULL AND TRIM(priceJson) <> '' THEN 'PRICED'
+                            ELSE 'PENDING'
+                        END,
+                        NULL,
+                        scannedAt,
+                        'MIGRATED_LOOSE',
+                        1.0,
+                        0,
+                        notes
+                    FROM loose_scans
+                    """.trimIndent(),
+                )
+            }
+        }
+
         fun create(context: Context): SessionDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 SessionDatabase::class.java,
                 "session.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 // No fallbackToDestructiveMigration: an unexpected schema bump
-                // shouldn't lose a user mid-box. Future bumps require a real
+                // shouldn't lose a user's scan list. Future bumps require a real
                 // Migration.
                 .build()
     }

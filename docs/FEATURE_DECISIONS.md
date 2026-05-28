@@ -2,6 +2,23 @@
 
 Date: 2026-05-26
 
+## 2026-05-27 Redesign
+
+- Replaced Pack/Box as the user-facing workflow with scan sessions.
+  - Why: pack order and box structure do not match the intended real-world scanning pattern.
+  - Outcome: Home, Scan, Current, Collection, Settings are the only bottom-nav destinations.
+
+- Kept legacy Pack/Box tables for migration.
+  - Why: dropping them in the same release would risk user data loss.
+  - Outcome: old rows can migrate to completed scan sessions; legacy UI is not routed.
+
+- Added automatic Frankfurter exchange-rate refresh.
+  - Why: hard-coded manual rates drift and make displayed value unreliable.
+  - Outcome: no-key USD-to-target rates are cached; offline/stale fallback is non-blocking.
+
+- Persisted Riftcodex domains.
+  - Why: Collection filtering by color/domain is useful and the metadata is already present upstream.
+
 ## Added
 
 - Debug-only OCR logging setting.
