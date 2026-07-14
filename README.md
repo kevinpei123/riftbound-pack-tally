@@ -35,15 +35,23 @@ in the database so existing rows can migrate into completed scan sessions.
   - 100 cards = 5 POSTs
 - Cache hits return locally and do not burn quota.
 - Cards without `tcgplayer_id` are marked unpriceable instead of crashing.
-- **Refresh all prices** (Collection) force-refetches every card, bypassing the
-  cache. Work is deduped to distinct `(tcgplayer_id, variant)` products, batched
-  20 per request, and rate-limited against JustTCG's 10-requests-per-minute
-  cap: once 7 of the 10 requests in the current minute window are used, each
-  further request backs off for 6 seconds before sending. If the window is
-  fully used (10/10), the remaining batch fails immediately with a rate-limit
-  error rather than waiting it out. There is no countdown UI. It stops early
-  and reports if the daily/monthly quota wall or cache-only mode is hit, and
-  writes each batch as it lands so partial progress is never lost.
+- Rate limiting against JustTCG's 10-requests-per-minute cap happens at two
+  separate layers, not one shared mechanism:
+  - **Ordinary Submit** (pending prices from a scan session): batched 20 per
+    request. Once 7 of the 10 requests in the current minute window are used,
+    each further request backs off for 6 seconds before sending. If the
+    window is fully used (10/10), the remaining batch fails immediately with
+    a rate-limit error rather than waiting it out. There is no countdown UI
+    for this path.
+  - **Refresh all prices** (Collection) force-refetches every card, bypassing
+    the cache. Work is deduped to distinct `(tcgplayer_id, variant)` products
+    and batched 20 per request, same as Submit, but on top of that it runs
+    its own outer window capped at 10 calls: after every 10 calls it waits a
+    full 60 seconds before the next window, showing a live countdown
+    ("Rate limit - next in Ns") via `CollectionViewModel`/`CollectionScreen`.
+    It stops early and reports if the daily/monthly quota wall or cache-only
+    mode is hit, and writes each batch as it lands so partial progress is
+    never lost.
 
 ## Card and Currency Data
 
