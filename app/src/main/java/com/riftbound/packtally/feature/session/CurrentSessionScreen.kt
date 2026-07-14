@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -34,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,14 +60,19 @@ import com.riftbound.packtally.model.ScanSession
 import com.riftbound.packtally.model.ScanSessionEntry
 import com.riftbound.packtally.model.Variant
 import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CurrentSessionScreen(onNavigateToScan: () -> Unit = {}) {
     val vm: CurrentSessionViewModel = viewModel()
     val session by vm.activeSession.collectAsStateWithLifecycle()
+    val isLoading by vm.isLoading.collectAsStateWithLifecycle()
     val submitInFlight by vm.submitInFlight.collectAsStateWithLifecycle()
     val pricingProgress by vm.pricingProgress.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -73,6 +80,7 @@ fun CurrentSessionScreen(onNavigateToScan: () -> Unit = {}) {
     var showAddSheet by remember { mutableStateOf(false) }
     var clearConfirm by remember { mutableStateOf(false) }
     var completeConfirm by remember { mutableStateOf(false) }
+    var renameSession by remember(session?.id) { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         vm.events.collect { event ->
@@ -83,6 +91,7 @@ fun CurrentSessionScreen(onNavigateToScan: () -> Unit = {}) {
                 CurrentSessionEvent.Undone -> "Undid last scan"
                 CurrentSessionEvent.Cleared -> "Session cleared"
                 CurrentSessionEvent.Completed -> "Session completed"
+                CurrentSessionEvent.Renamed -> "Session renamed"
                 is CurrentSessionEvent.PricingDone ->
                     "Priced ${event.priced}, failed ${event.failed}, unpriceable ${event.unpriceable}"
                 is CurrentSessionEvent.Error -> event.message
@@ -92,7 +101,14 @@ fun CurrentSessionScreen(onNavigateToScan: () -> Unit = {}) {
     }
 
     val current = session
-    if (current == null) {
+    if (current == null && isLoading) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator()
+        }
+    } else if (current == null) {
         EmptyCurrentSession(
             onStart = {
                 vm.startNewSession()
@@ -112,6 +128,7 @@ fun CurrentSessionScreen(onNavigateToScan: () -> Unit = {}) {
             onSubmit = vm::submitPendingPrices,
             onClear = { clearConfirm = true },
             onComplete = { completeConfirm = true },
+            onRename = { renameSession = true },
         )
     }
 
@@ -159,6 +176,36 @@ fun CurrentSessionScreen(onNavigateToScan: () -> Unit = {}) {
             },
         )
     }
+
+    val currentForRename = session
+    if (renameSession && currentForRename != null) {
+        var draftName by remember(currentForRename.id) {
+            mutableStateOf(currentForRename.name.orEmpty())
+        }
+        AlertDialog(
+            onDismissRequest = { renameSession = false },
+            title = { Text("Rename session") },
+            text = {
+                OutlinedTextField(
+                    value = draftName,
+                    onValueChange = { draftName = it },
+                    label = { Text("Session name") },
+                    placeholder = { Text(currentForRename.displayName) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    renameSession = false
+                    vm.renameSession(draftName.trim())
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameSession = false }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -197,6 +244,7 @@ private fun CurrentSessionContent(
     onSubmit: () -> Unit,
     onClear: () -> Unit,
     onComplete: () -> Unit,
+    onRename: () -> Unit,
 ) {
     val entries = session.entries.sortedByDescending { it.scannedAt }
     LazyColumn(
@@ -214,6 +262,7 @@ private fun CurrentSessionContent(
                 onSubmit = onSubmit,
                 onClear = onClear,
                 onComplete = onComplete,
+                onRename = onRename,
             )
         }
         if (entries.isEmpty()) {
@@ -248,6 +297,7 @@ private fun SessionHeader(
     onSubmit: () -> Unit,
     onClear: () -> Unit,
     onComplete: () -> Unit,
+    onRename: () -> Unit,
 ) {
     val formatter = LocalCurrencyFormatter.current
     val pending = session.pendingPriceCount
@@ -255,15 +305,44 @@ private fun SessionHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(session.displayName, style = MaterialTheme.typography.headlineSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistChip(onClick = {}, label = { Text("${session.totalCards} cards") })
-            AssistChip(onClick = {}, label = { Text("${session.entries.map { it.card.id }.distinct().size} unique") })
-            AssistChip(onClick = {}, label = { Text("${formatter.format(session.totalValueUsd)} value") })
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    session.displayName,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${session.totalCards} cards - $pending pending",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onRename) {
+                Icon(Icons.Filled.Edit, contentDescription = "Rename session")
+            }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistChip(onClick = {}, enabled = false, label = { Text("${session.totalCards} cards") })
+            AssistChip(onClick = {}, enabled = false, label = { Text("${session.entries.map { it.card.id }.distinct().size} unique") })
+        }
+        Text(
+            "${formatter.format(session.totalValueUsd)} value",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
         if (duplicateCount > 0) {
             Text(
                 "$duplicateCount duplicate group${if (duplicateCount == 1) "" else "s"} in this session",
@@ -360,14 +439,33 @@ private fun SessionEntryRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(
-                        selected = false,
-                        onClick = { variantMenuOpen = true },
-                        label = { Text(entry.variant.name.lowercase().replaceFirstChar { it.uppercase() }) },
-                        leadingIcon = {
-                            Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                        },
-                    )
+                    Box {
+                        FilterChip(
+                            selected = false,
+                            onClick = { variantMenuOpen = true },
+                            label = { Text(entry.variant.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                            leadingIcon = {
+                                Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                            },
+                            modifier = Modifier.semantics {
+                                onClick(label = "Change variant") { false }
+                            },
+                        )
+                        DropdownMenu(
+                            expanded = variantMenuOpen,
+                            onDismissRequest = { variantMenuOpen = false },
+                        ) {
+                            Variant.entries.forEach { variant ->
+                                DropdownMenuItem(
+                                    text = { Text(variant.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                                    onClick = {
+                                        variantMenuOpen = false
+                                        onChangeVariant(variant)
+                                    },
+                                )
+                            }
+                        }
+                    }
                     PricingChip(entry)
                 }
             }
@@ -376,28 +474,16 @@ private fun SessionEntryRow(
                     LocalCurrencyFormatter.current.format(entry.marketPrice),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 116.dp),
                 )
                 Text(
                     entry.scannedAt.atZone(ZoneId.systemDefault()).format(TIME_FORMAT),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            Box {
-                DropdownMenu(
-                    expanded = variantMenuOpen,
-                    onDismissRequest = { variantMenuOpen = false },
-                ) {
-                    Variant.entries.forEach { variant ->
-                        DropdownMenuItem(
-                            text = { Text(variant.name.lowercase().replaceFirstChar { it.uppercase() }) },
-                            onClick = {
-                                variantMenuOpen = false
-                                onChangeVariant(variant)
-                            },
-                        )
-                    }
-                }
             }
             IconButton(onClick = onRemove) {
                 Icon(Icons.Filled.DeleteOutline, contentDescription = "Remove ${entry.card.name}")
@@ -410,11 +496,12 @@ private fun SessionEntryRow(
 private fun PricingChip(entry: ScanSessionEntry) {
     val label = when (entry.pricingStatus) {
         PricingStatus.PENDING -> "Pending"
-        PricingStatus.PRICED -> "Priced"
+        PricingStatus.PRICED -> if (entry.isPriced) "Priced" else "Pending"
         PricingStatus.FAILED -> "Failed"
         PricingStatus.UNPRICEABLE -> "No TCG ID"
     }
-    AssistChip(onClick = {}, label = { Text(label) })
+    AssistChip(onClick = {}, enabled = false, label = { Text(label) })
 }
 
-private val TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm")
+private val TIME_FORMAT =
+    DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(Locale.getDefault())

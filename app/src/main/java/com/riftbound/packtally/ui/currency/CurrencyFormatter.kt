@@ -2,6 +2,7 @@ package com.riftbound.packtally.ui.currency
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.riftbound.packtally.core.settings.Currency
+import java.util.Locale
 
 /**
  * Formats USD amounts (the canonical storage unit) into the user's preferred
@@ -16,8 +17,15 @@ class CurrencyFormatter(
     private val usdToTargetRate: Double,
 ) {
     fun format(usdAmount: Double): String {
-        val converted = if (currency == Currency.USD) usdAmount else usdAmount * usdToTargetRate
-        return "${currency.symbol}${"%.2f".format(converted)}"
+        val converted = if (currency == Currency.USD) {
+            usdAmount
+        } else {
+            // A failed/stale exchange-rate fetch can leave the rate at 0.0, NaN,
+            // or negative; fall back to 1.0 so prices never render as NaN/Infinity.
+            val safeRate = usdToTargetRate.takeIf { it.isFinite() && it > 0.0 } ?: 1.0
+            usdAmount * safeRate
+        }
+        return "${currency.symbol}${String.format(Locale.US, "%.2f", converted)}"
     }
 
     companion object {

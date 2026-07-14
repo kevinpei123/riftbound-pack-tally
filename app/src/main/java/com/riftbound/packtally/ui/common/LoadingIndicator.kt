@@ -13,6 +13,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /**
@@ -21,11 +25,15 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun LoadingIndicator(
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier.fillMaxSize(),
     label: String? = null,
 ) {
+    val description = label ?: "Loading"
     Box(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.semantics {
+            contentDescription = description
+            liveRegion = LiveRegionMode.Polite
+        },
         contentAlignment = Alignment.Center,
     ) {
         Column(
@@ -49,7 +57,12 @@ fun LoadingIndicator(
 @Composable
 fun InlineLoader(modifier: Modifier = Modifier) {
     CircularProgressIndicator(
-        modifier = modifier.size(20.dp),
+        modifier = modifier
+            .size(20.dp)
+            .semantics {
+                contentDescription = "Loading"
+                liveRegion = LiveRegionMode.Polite
+            },
         strokeWidth = 2.dp,
     )
 }

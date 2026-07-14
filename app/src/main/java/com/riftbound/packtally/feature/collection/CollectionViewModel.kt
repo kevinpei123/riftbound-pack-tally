@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -92,6 +93,8 @@ data class CollectionGroup(
 
 data class CollectionState(
     val groups: List<CollectionGroup> = emptyList(),
+    /** Full, unfiltered aggregate — used by export so it always reflects the whole collection. */
+    val allEntries: List<CollectionEntry> = emptyList(),
     val totalValue: Double = 0.0,
     val totalCards: Int = 0,
     val uniqueCards: Int = 0,
@@ -105,11 +108,25 @@ sealed interface CollectionEvent {
     data class ExportSucceeded(val path: String) : CollectionEvent
     data class ExportFailed(val reason: String) : CollectionEvent
     data class ManualAddSucceeded(val cardName: String) : CollectionEvent
+    data class ManualAddFailed(val cardName: String) : CollectionEvent
     data class RemoveSucceeded(val cardName: String) : CollectionEvent
     data class RemoveNotFound(val cardName: String) : CollectionEvent
     data class SubmitCompleted(val priced: Int, val failed: Int, val unpriceable: Int) : CollectionEvent
     data class SubmitFailed(val reason: String) : CollectionEvent
+    data class RecallCompleted(
+        val priced: Int,
+        val failed: Int,
+        val unpriceable: Int,
+        val stoppedReason: String?,
+    ) : CollectionEvent
+    data class RecallFailed(val reason: String) : CollectionEvent
 }
+
+/** Estimate shown in the "refresh all prices" confirmation dialog. */
+data class RecallPrompt(
+    val calls: Int,
+    val waits: Int,
+)
 
 class CollectionViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -123,10 +140,23 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _pricingProgress = MutableStateFlow<String?>(null)
     val pricingProgress: StateFlow<String?> = _pricingProgress.asStateFlow()
 
+    private val _recallInFlight = MutableStateFlow(false)
+    val recallInFlight: StateFlow<Boolean> = _recallInFlight.asStateFlow()
+
+    private val _recallProgress = MutableStateFlow<String?>(null)
+    val recallProgress: StateFlow<String?> = _recallProgress.asStateFlow()
+
+    private val _recallPrompt = MutableStateFlow<RecallPrompt?>(null)
+    val recallPrompt: StateFlow<RecallPrompt?> = _recallPrompt.asStateFlow()
+
     val state: StateFlow<CollectionState> =
         combine(sessionRepository.observeAllEntries(), _filter) { entries, filter ->
             buildState(entries, filter)
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, CollectionState())
+        }
+            // buildState aggregates/sorts/groups the whole collection — keep that
+            // CPU work off the main thread.
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, CollectionState())
 
     private val _events = MutableSharedFlow<CollectionEvent>()
     val events: SharedFlow<CollectionEvent> = _events.asSharedFlow()
@@ -134,7 +164,8 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
     fun refresh() = Unit
 
     fun setQuery(query: String) {
-        _filter.value = _filter.value.copy(query = query)
+        // Cap length so a pasted megastring can't trigger an unbounded filter/sort pass.
+        _filter.value = _filter.value.copy(query = query.take(64))
     }
 
     fun setSort(sort: CollectionSort) {
@@ -180,6 +211,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 )
             }.onFailure {
                 Log.e(TAG, "Manual add failed for ${card.id} $variant", it)
+                _events.emit(CollectionEvent.ManualAddFailed(card.name))
             }.onSuccess {
                 _events.emit(CollectionEvent.ManualAddSucceeded(card.name))
             }
@@ -200,7 +232,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun submitPendingPrices() {
-        if (_submitInFlight.value) return
+        if (_submitInFlight.value || _recallInFlight.value) return
         _submitInFlight.value = true
         viewModelScope.launch {
             val result = runCatching {
@@ -236,6 +268,69 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Compute the cost estimate and raise the confirmation prompt (no network yet). */
+    fun requestRecall() {
+        if (_recallInFlight.value || _submitInFlight.value) return
+        viewModelScope.launch {
+            val calls = runCatching { sessionRepository.repriceableCallEstimate() }
+                .onFailure { Log.e(TAG, "Recall estimate failed", it) }
+                .getOrDefault(0)
+            if (calls == 0) {
+                _events.emit(CollectionEvent.RecallCompleted(0, 0, 0, null))
+            } else {
+                _recallPrompt.value = RecallPrompt(
+                    calls = calls,
+                    waits = SessionRepository.recallWaitCount(calls),
+                )
+            }
+        }
+    }
+
+    fun dismissRecallPrompt() {
+        _recallPrompt.value = null
+    }
+
+    /** Force-refresh every collection price from JustTCG, rate-limited in 10-call windows. */
+    fun recallAllPrices() {
+        _recallPrompt.value = null
+        if (_recallInFlight.value || _submitInFlight.value) return
+        _recallInFlight.value = true
+        viewModelScope.launch {
+            val result = runCatching {
+                sessionRepository.repriceAll(app.pricing) { progress ->
+                    _recallProgress.value = when (progress) {
+                        is SessionRepository.RepriceProgress.Pricing ->
+                            "Refreshing ${progress.currentBatch}/${progress.totalBatches}"
+                        is SessionRepository.RepriceProgress.Waiting ->
+                            "Rate limit - next in ${progress.secondsRemaining}s"
+                    }
+                }
+            }
+            _recallInFlight.value = false
+            _recallProgress.value = null
+            result
+                .onSuccess { submit ->
+                    when (submit) {
+                        SessionRepository.SubmitResult.Empty ->
+                            _events.emit(CollectionEvent.RecallCompleted(0, 0, 0, null))
+                        is SessionRepository.SubmitResult.Done ->
+                            _events.emit(
+                                CollectionEvent.RecallCompleted(
+                                    priced = submit.priced,
+                                    failed = submit.failed,
+                                    unpriceable = submit.unpriceable,
+                                    stoppedReason = submit.stoppedReason,
+                                ),
+                            )
+                    }
+                }
+                .onFailure {
+                    Log.e(TAG, "Recall all prices failed", it)
+                    _events.emit(CollectionEvent.RecallFailed(it.message ?: "refresh failed"))
+                }
+        }
+    }
+
     fun exportToJson() {
         val snapshot = state.value
         viewModelScope.launch {
@@ -262,7 +357,9 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 entry.card.name.lowercase().contains(q) ||
                 entry.card.collectorNumber.lowercase().contains(q)
             queryOk &&
-                (!filter.pendingOnly || entry.pendingCount + entry.failedCount + entry.unpriceableCount > 0) &&
+                // "Pending" means still-priceable work, so exclude UNPRICEABLE
+                // (matches pendingPriceCount / the submit button semantics).
+                (!filter.pendingOnly || entry.pendingCount + entry.failedCount > 0) &&
                 (filter.variant == null || entry.variant == filter.variant) &&
                 (filter.setCode == null || entry.card.setCode == filter.setCode) &&
                 (filter.rarity == null || entry.card.rarity == filter.rarity) &&
@@ -272,6 +369,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         val groups = groupEntries(filtered, filter.group)
         return CollectionState(
             groups = groups,
+            allEntries = aggregate,
             totalValue = aggregate.sumOf { it.totalMarketValue },
             totalCards = aggregate.sumOf { it.quantity },
             uniqueCards = aggregate.map { it.card.id }.distinct().size,
@@ -387,7 +485,7 @@ private fun CollectionState.toExportPayload(): ExportPayload = ExportPayload(
     totalCards = totalCards,
     uniqueCards = uniqueCards,
     pendingPrices = pendingPriceCount,
-    collection = groups.flatMap { it.entries }.map { it.toExport() },
+    collection = allEntries.map { it.toExport() },
 )
 
 private fun CollectionEntry.toExport(): EntryExport = EntryExport(

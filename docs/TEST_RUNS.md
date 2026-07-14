@@ -1,5 +1,29 @@
 # Test Runs
 
+## 2026-05-28 Pricing And Install Warning Follow-Up
+
+Host: Windows / PowerShell
+Device: Huawei VOG-L09 / Android 10 / adb id `4BF0219427000620`
+
+| Command | Result | Notes |
+|---|---:|---|
+| `adb devices -l` via SDK platform-tools | PASS | Phone visible as `VOG-L09`. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache test lint assembleDebug installDebug` | PASS | Unit tests, lint, debug build, and phone install succeeded after the JustTCG fallback fix. Latest APK is 80,503,816 bytes / 76.77 MiB. |
+| `adb shell am start -W -n com.riftbound.packtally/.MainActivity` | PASS | Cold launch `TotalTime 1858ms`. |
+| `./gradlew --no-daemon --console=plain --no-configuration-cache --project-prop android.debug.obsoleteApi=true help` | PASS | Remaining legacy variant warnings are emitted by the `kotlin-android` plugin while built-in Kotlin migration is incomplete. |
+
+Notes:
+
+- Removed stale AGP properties that caused several install-time deprecation
+  warnings, and migrated Kotlin JVM target config away from deprecated
+  `kotlinOptions`.
+- `android.builtInKotlin=false` and `android.newDsl=false` remain because this
+  AGP/Kotlin plugin combination fails during configuration without them.
+- The installed app data did not expose a JustTCG API key, so live Karthus
+  pricing could not be exercised from automation. The unit test now covers the
+  Karthus-style case where JustTCG only returns a foil variant for a Standard
+  request.
+
 ## 2026-05-27 Scan Session Redesign
 
 Host: Windows / PowerShell

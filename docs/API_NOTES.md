@@ -63,6 +63,12 @@ Variant mapping:
 Signature uses Foil/Near Mint because JustTCG does not expose a separate
 Signature printing.
 
+The app posts only `tcgplayerId` values to `POST /cards` and applies the
+variant mapping locally after the response. Exact printing/condition matches
+still win. If no exact row exists, the app falls back to same-condition English
+or highest-price variants so product listings that only expose foil rows, such
+as Karthus, Eternal, remain priceable instead of being marked failed.
+
 ## Frankfurter Currency Rates
 
 - Base URL: `https://api.frankfurter.dev/`

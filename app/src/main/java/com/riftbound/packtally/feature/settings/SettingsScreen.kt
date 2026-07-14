@@ -7,9 +7,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -24,9 +27,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -40,7 +40,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -50,6 +55,10 @@ import com.riftbound.packtally.core.settings.AppSettings
 import com.riftbound.packtally.core.settings.Currency
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,9 +84,10 @@ fun SettingsScreen(onNavigateToBackup: () -> Unit = {}) {
                 SettingsEvent.CacheCleared -> "Cache cleared"
                 SettingsEvent.ResetComplete -> "All data reset"
                 is SettingsEvent.CardDbResynced -> "Synced ${event.cardCount} cards"
-                is SettingsEvent.CardDbResyncFailed -> "Re-sync failed - ${event.reason}"
+                is SettingsEvent.CardDbResyncFailed -> "Re-sync failed - ${friendlyError(event.reason)}"
                 is SettingsEvent.ExchangeRateUpdated -> "Exchange rate updated for ${event.target}"
-                is SettingsEvent.ExchangeRateFailed -> "Exchange rate refresh failed - ${event.reason}"
+                is SettingsEvent.ExchangeRateFailed ->
+                    "Exchange rate refresh failed - ${friendlyError(event.reason)}"
             }
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
@@ -176,7 +186,8 @@ private fun ApiKeySection(settings: AppSettings, onChange: (String?) -> Unit) {
             value = input,
             onValueChange = {
                 input = it
-                onChange(it)
+                val v = it.trim()
+                if (v.isBlank() || v.startsWith("tcg_")) onChange(v)
             },
             placeholder = { Text("tcg_...") },
             singleLine = true,
@@ -186,6 +197,7 @@ private fun ApiKeySection(settings: AppSettings, onChange: (String?) -> Unit) {
                     Text("JustTCG keys start with tcg_")
                 }
             },
+            visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
@@ -196,7 +208,6 @@ private fun ApiKeySection(settings: AppSettings, onChange: (String?) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CurrencySection(
     settings: AppSettings,
@@ -204,20 +215,30 @@ private fun CurrencySection(
     onCurrencyChange: (Currency) -> Unit,
     onRefresh: () -> Unit,
 ) {
+    var showPicker by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionLabel("Currency")
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            Currency.entries.forEachIndexed { index, currency ->
-                SegmentedButton(
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = Currency.entries.size),
-                    selected = settings.currency == currency,
-                    onClick = { onCurrencyChange(currency) },
-                ) { Text(currency.code) }
+        OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(settings.currency.code, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Choose display currency",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(settings.currency.symbol.trim().ifBlank { settings.currency.code })
             }
         }
         val fetched = settings.exchangeRateFetchedAt?.let(::formatTimestamp) ?: "never"
         Text(
-            "USD to ${settings.currency.code}: ${"%.4f".format(settings.usdToTargetRate)}. " +
+            "USD to ${settings.currency.code}: ${String.format(Locale.US, "%.4f", settings.usdToTargetRate)}. " +
                 "Last updated $fetched from ${settings.exchangeRateSource ?: "no source"}.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -235,7 +256,7 @@ private fun CurrencySection(
             modifier = Modifier.fillMaxWidth(),
         ) {
             if (refreshing) {
-                CircularProgressIndicator(modifier = Modifier.height(16.dp), strokeWidth = 2.dp)
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
                 Text("Refreshing")
             } else {
@@ -243,6 +264,77 @@ private fun CurrencySection(
             }
         }
     }
+
+    if (showPicker) {
+        CurrencyPickerDialog(
+            selected = settings.currency,
+            onDismiss = { showPicker = false },
+            onPick = {
+                showPicker = false
+                onCurrencyChange(it)
+            },
+        )
+    }
+}
+
+@Composable
+private fun CurrencyPickerDialog(
+    selected: Currency,
+    onDismiss: () -> Unit,
+    onPick: (Currency) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(query) {
+        val q = query.trim().uppercase()
+        Currency.entries.filter {
+            q.isBlank() || it.code.contains(q) || it.name.contains(q)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Choose currency") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search currency code") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(filtered, key = { it.code }) { currency ->
+                        TextButton(
+                            onClick = { onPick(currency) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column {
+                                    Text(currency.code, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        currency.symbol.trim().ifBlank { currency.code },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (currency == selected) Text("Selected")
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
 }
 
 @Composable
@@ -269,7 +361,7 @@ private fun CardDatabaseSection(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (isSyncing) {
-                    CircularProgressIndicator(modifier = Modifier.height(16.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
                     Text("Re-syncing")
                 } else {
@@ -345,13 +437,20 @@ private fun QuotaRow(label: String, used: Int, limit: Int, resetsAt: Instant) {
 
 @Composable
 private fun CacheTtlSection(ttlHours: Int, onChange: (Int) -> Unit) {
+    var sliderValue by remember(ttlHours) { mutableStateOf(ttlHours.toFloat()) }
+    val draftHours = sliderValue.roundToInt()
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SectionLabel("Price cache TTL - $ttlHours hour${if (ttlHours == 1) "" else "s"}")
+        SectionLabel("Price cache TTL - $draftHours hour${if (draftHours == 1) "" else "s"}")
         Slider(
-            value = ttlHours.toFloat(),
-            onValueChange = { onChange(it.roundToInt()) },
+            value = sliderValue,
+            onValueChange = { sliderValue = it },
+            onValueChangeFinished = { onChange(sliderValue.roundToInt()) },
             valueRange = 1f..24f,
             steps = 22,
+            modifier = Modifier.semantics {
+                contentDescription = "Price cache time to live"
+                stateDescription = "$draftHours hour${if (draftHours == 1) "" else "s"}"
+            },
         )
         Text(
             "Cache hits do not burn JustTCG quota.",
@@ -430,9 +529,28 @@ private fun SectionLabel(text: String) {
     Text(text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 }
 
-private fun formatTimestamp(t: Instant): String =
-    t.atZone(java.time.ZoneId.systemDefault())
-        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+/** Maps raw exception text to friendly, non-technical copy for toasts. */
+private fun friendlyError(reason: String): String {
+    val r = reason.lowercase(Locale.US)
+    return when {
+        "unknownhost" in r || "no address" in r || "unable to resolve" in r ->
+            "no internet connection"
+        "timeout" in r || "timed out" in r -> "the request timed out"
+        "connect" in r || "network" in r -> "could not reach the server"
+        "401" in r || "403" in r || "unauthorized" in r || "forbidden" in r ->
+            "check your API key"
+        "429" in r || "rate limit" in r -> "rate limit reached, try again later"
+        "500" in r || "502" in r || "503" in r || "504" in r -> "the server had a problem"
+        else -> "please try again"
+    }
+}
+
+private val TIMESTAMP_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
+        .withLocale(Locale.getDefault())
+        .withZone(ZoneId.systemDefault())
+
+private fun formatTimestamp(t: Instant): String = TIMESTAMP_FORMATTER.format(t)
 
 private fun formatDurationUntil(target: Instant): String {
     val now = Instant.now()
@@ -440,11 +558,12 @@ private fun formatDurationUntil(target: Instant): String {
     val d = Duration.between(now, target)
     val hours = d.toHours()
     val minutes = d.toMinutes() % 60
-    return "%02d:%02d".format(hours, minutes)
+    return String.format(Locale.getDefault(), "%02d:%02d", hours, minutes)
 }
 
 private fun formatBytes(bytes: Long): String = when {
     bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-    else -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
+    bytes < 1024 * 1024 -> String.format(Locale.getDefault(), "%.1f KB", bytes / 1024.0)
+    bytes < 1024L * 1024 * 1024 -> String.format(Locale.getDefault(), "%.1f MB", bytes / 1024.0 / 1024.0)
+    else -> String.format(Locale.getDefault(), "%.1f GB", bytes / 1024.0 / 1024.0 / 1024.0)
 }

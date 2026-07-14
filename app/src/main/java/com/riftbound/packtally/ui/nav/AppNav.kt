@@ -1,11 +1,8 @@
 package com.riftbound.packtally.ui.nav
 
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -22,7 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -49,9 +46,10 @@ fun AppNav() {
 
     // Confirm dialog state is host-local — the tracker emits PromptConfirm on
     // every successful network call at ≥95%, but the UI shows at most one
-    // dialog at a time. Once the user picks an action the dialog dismisses;
-    // future events re-open it unless the user picked Cache-only.
+    // dialog at a time. Once the user dismisses it we suppress re-showing for
+    // the rest of the session so it doesn't re-open on every subsequent scan.
     var quotaConfirm by remember { mutableStateOf<QuotaEvent.PromptConfirm?>(null) }
+    var quotaPromptDismissed by remember { mutableStateOf(false) }
 
     LaunchedEffect(app.quotaTracker) {
         app.quotaTracker.events.collect { event ->
@@ -64,7 +62,7 @@ fun AppNav() {
                     )
                 }
                 is QuotaEvent.PromptConfirm -> {
-                    if (quotaConfirm == null) quotaConfirm = event
+                    if (quotaConfirm == null && !quotaPromptDismissed) quotaConfirm = event
                 }
             }
         }
@@ -83,16 +81,14 @@ fun AppNav() {
                         icon = {
                             Icon(
                                 dest.icon,
-                                contentDescription = dest.label,
-                                modifier = Modifier.size(20.dp),
+                                contentDescription = null,
                             )
                         },
                         label = {
                             Text(
                                 dest.label,
-                                style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
-                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         },
                         colors = NavigationBarItemDefaults.colors(),
@@ -125,15 +121,20 @@ fun AppNav() {
             }
             composable(Destination.Collection.route) { CollectionScreen() }
             composable(Destination.Settings.route) {
-                SettingsScreen(onNavigateToBackup = { navController.navigate("backup") })
+                SettingsScreen(onNavigateToBackup = { navController.navigate(BACKUP_ROUTE) })
             }
-            composable("backup") { BackupScreen() }
+            composable(BACKUP_ROUTE) {
+                BackupScreen(onNavigateBack = { navController.popBackStack() })
+            }
         }
     }
 
     quotaConfirm?.let { confirm ->
         AlertDialog(
-            onDismissRequest = { quotaConfirm = null },
+            onDismissRequest = {
+                quotaConfirm = null
+                quotaPromptDismissed = true
+            },
             title = { Text("API quota almost exhausted") },
             text = {
                 val s = confirm.state
@@ -149,19 +150,21 @@ fun AppNav() {
                 TextButton(onClick = {
                     app.quotaTracker.setUseCachedOnly(true)
                     quotaConfirm = null
+                    quotaPromptDismissed = true
                 }) { Text("Use cached only") }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { quotaConfirm = null },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.primary,
-                    ),
-                ) { Text("Continue") }
+                TextButton(onClick = {
+                    quotaConfirm = null
+                    quotaPromptDismissed = true
+                }) { Text("Continue") }
             },
         )
     }
 }
+
+/** Non-tab route. Kept in one place so navigate() and composable() can't drift. */
+private const val BACKUP_ROUTE = "backup"
 
 private fun NavController.navigateToTab(route: String) {
     navigate(route) {

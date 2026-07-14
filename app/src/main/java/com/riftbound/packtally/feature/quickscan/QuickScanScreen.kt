@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,11 +34,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,10 +54,13 @@ import com.riftbound.packtally.feature.scanner.CameraScreen
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.Variant
 import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 private const val SEARCH_DEBOUNCE_MS = 300L
 private const val MANUAL_ENTRY_SUGGEST_AFTER = 3
+private const val MAX_SEARCH_QUERY_LEN = 40
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,6 +90,11 @@ fun QuickScanScreen() {
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
     }
+
+    // Re-read pending rows on (re-)entry. clearSessionStats() on dispose zeroes
+    // cardsAdded, so a ViewModel that survives a back-stack dispose/recompose
+    // would otherwise under-report existing pending loose scans.
+    LaunchedEffect(vm) { vm.refreshPending() }
 
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose { vm.clearSessionStats() }
@@ -113,6 +126,10 @@ fun QuickScanScreen() {
                     isSubmitting = isSubmitting,
                     onSubmit = vm::submitPending,
                 )
+                (submitState as? QuickScanSubmitState.Failed)?.let { failed ->
+                    Spacer(Modifier.height(8.dp))
+                    SubmitFailedRow(reason = failed.reason, onRetry = vm::submitPending)
+                }
             }
             if (ocrFailureCount >= MANUAL_ENTRY_SUGGEST_AFTER || state is QuickScanState.Failed) {
                 Spacer(Modifier.height(8.dp))
@@ -175,7 +192,7 @@ private fun RapidModeChip(
         color = if (enabled) {
             MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.95f)
         } else {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+            MaterialTheme.colorScheme.surface
         },
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 2.dp,
@@ -224,7 +241,11 @@ private fun SubmitPendingButton(
         Button(
             onClick = onSubmit,
             enabled = !isSubmitting,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics {
+                    if (isSubmitting) stateDescription = "Fetching prices"
+                },
         ) {
             if (isSubmitting) {
                 CircularProgressIndicator(
@@ -242,12 +263,38 @@ private fun SubmitPendingButton(
 }
 
 @Composable
+private fun SubmitFailedRow(reason: String, onRetry: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.95f),
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 2.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Pricing failed — $reason",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
+
+@Composable
 private fun SessionTallyChip(stats: SessionStats) {
     val cards = stats.cardsAdded
     if (cards == 0) return
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 4.dp,
     ) {
@@ -282,7 +329,7 @@ private fun SessionTallyChip(stats: SessionStats) {
 private fun TypeInsteadButton(onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 2.dp,
     ) {
@@ -311,12 +358,17 @@ private fun IdentifiedContent(
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(4.dp))
+        val rarityLabel = card.rarity.name.lowercase().replaceFirstChar { it.uppercase() }
+        val confidencePct = (confidence * 100).toInt()
         Text(
-            "${card.setCode}-${card.collectorNumber} • " +
-                card.rarity.name.lowercase().replaceFirstChar { it.uppercase() } +
-                " • ${(confidence * 100).toInt()}%",
+            "${card.setCode}-${card.collectorNumber} • $rarityLabel • $confidencePct%",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.semantics {
+                contentDescription =
+                    "Set ${card.setCode}, number ${card.collectorNumber}, " +
+                    "$rarityLabel, $confidencePct% match confidence"
+            },
         )
         Spacer(Modifier.height(20.dp))
         Row(
@@ -331,10 +383,12 @@ private fun IdentifiedContent(
                 onClick = { onVariantSelected(Variant.FOIL) },
                 modifier = Modifier.weight(1f),
             ) { Text("Foil") }
-            Button(
-                onClick = { onVariantSelected(Variant.SIGNATURE) },
-                modifier = Modifier.weight(1f),
-            ) { Text("Signature") }
+            if (card.hasSignatureVariant) {
+                Button(
+                    onClick = { onVariantSelected(Variant.SIGNATURE) },
+                    modifier = Modifier.weight(1f),
+                ) { Text("Signature") }
+            }
         }
         Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = onRescan, modifier = Modifier.fillMaxWidth()) {
@@ -360,7 +414,9 @@ private fun AmbiguousContent(
         candidates.forEach { card ->
             TextButton(
                 onClick = { onPick(card) },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
@@ -479,16 +535,29 @@ private fun ManualEntrySheet(
 ) {
     var query by remember { mutableStateOf("") }
     var debounced by remember { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
 
     LaunchedEffect(query) {
-        if (query == debounced) return@LaunchedEffect
+        // Trim + cap before searching: Levenshtein cost scales with query length,
+        // so an unbounded pasted string makes the fuzzy lookup markedly slower,
+        // and leading/trailing spaces alter normalization edge cases.
+        val normalized = query.trim().take(MAX_SEARCH_QUERY_LEN)
+        if (normalized == debounced) return@LaunchedEffect
         delay(SEARCH_DEBOUNCE_MS)
-        debounced = query
+        debounced = normalized
     }
 
-    val results = remember(debounced) {
-        if (debounced.isBlank()) emptyList()
-        else CardDatabase.lookupByNameFuzzy(debounced, limit = 8)
+    val results by produceState(initialValue = emptyList<RiftboundCard>(), debounced) {
+        if (debounced.isBlank()) {
+            value = emptyList()
+            searching = false
+        } else {
+            searching = true
+            value = withContext(Dispatchers.Default) {
+                CardDatabase.lookupByNameFuzzy(debounced, limit = 8)
+            }
+            searching = false
+        }
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -514,6 +583,21 @@ private fun ManualEntrySheet(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            } else if (searching) {
+                // Search runs off the main thread, so without this branch the UI
+                // would briefly show a false "No matches." before results arrive.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Searching…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             } else if (results.isEmpty()) {
                 Text(
                     "No matches.",

@@ -19,9 +19,13 @@ import com.riftbound.packtally.model.ScanEntrySource
 import com.riftbound.packtally.model.ScanSession
 import com.riftbound.packtally.model.ScanSessionEntry
 import com.riftbound.packtally.model.Variant
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -58,6 +62,9 @@ class ScannerViewModel(
     private val _lastAdded = MutableStateFlow<ScanSessionEntry?>(null)
     val lastAdded: StateFlow<ScanSessionEntry?> = _lastAdded.asStateFlow()
 
+    private val _rapidAddEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val rapidAddEvents: SharedFlow<Unit> = _rapidAddEvents.asSharedFlow()
+
     val activeSession: StateFlow<ScanSession?> =
         sessions.observeActiveSession().stateIn(
             scope = viewModelScope,
@@ -80,6 +87,7 @@ class ScannerViewModel(
             }
             if (_rapidMode.value && result is ScanResult.Identified) {
                 saveIdentified(result.card, Variant.STANDARD, result.confidence, ScanEntrySource.RAPID)
+                _rapidAddEvents.tryEmit(Unit)
                 _scanResult.value = ScanResult.Idle
             } else {
                 _scanResult.value = result
@@ -157,9 +165,12 @@ class ScannerViewModel(
             }
 
             ScanResult.Failed("No readable text on card")
+        } catch (e: TimeoutCancellationException) {
+            Log.e(TAG, "Identify timed out", e)
+            ScanResult.Failed("Scanning took too long. Try again.")
         } catch (e: Throwable) {
             Log.e(TAG, "Identify failed", e)
-            ScanResult.Failed(e.message ?: "Recognition error")
+            ScanResult.Failed("Couldn't read the card. Try again.")
         }
     }
 

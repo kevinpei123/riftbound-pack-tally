@@ -71,12 +71,20 @@ class BackupRepository(
      * backups can be safely shared or pulled over USB without leaking the key.
      */
     suspend fun createManualBackup(): File = withContext(Dispatchers.IO) {
+        val dir = backupDir(MANUAL_BACKUP_SUBDIR).apply { mkdirs() }
+        writeBackupZip(dir)
+    }
+
+    /**
+     * Build a backup zip directly into [dir]. Shared by both the manual and auto
+     * paths so neither has to re-walk the source data or double-write the file.
+     */
+    private suspend fun writeBackupZip(dir: File): File {
         // Make sure the WAL is flushed into the main .db file before we copy it.
         runCatching {
             sessionDatabase.openHelper.writableDatabase.execSQL("PRAGMA wal_checkpoint(FULL)")
         }.onFailure { Log.w(TAG, "WAL checkpoint failed; backup may miss recent writes", it) }
 
-        val dir = backupDir(MANUAL_BACKUP_SUBDIR).apply { mkdirs() }
         val timestamp = LocalDateTime.now()
             .format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
         val outFile = File(dir, "riftbound-backup-$timestamp.zip")
@@ -130,7 +138,7 @@ class BackupRepository(
             }
         }
 
-        outFile
+        return outFile
     }
 
     /**
@@ -206,24 +214,10 @@ class BackupRepository(
      * WorkManager periodic job; safe to call directly from tests.
      */
     suspend fun createAutoBackup(): File = withContext(Dispatchers.IO) {
-        val out = createManualBackupInto(backupDir(AUTO_BACKUP_SUBDIR))
+        val dir = backupDir(AUTO_BACKUP_SUBDIR).apply { mkdirs() }
+        val out = writeBackupZip(dir)
         pruneAutoBackups()
         out
-    }
-
-    private suspend fun createManualBackupInto(dir: File): File {
-        // Helper used by both manual and auto paths — mirrors createManualBackup
-        // logic but parameterized on output dir.
-        dir.mkdirs()
-        // We call createManualBackup() then move the file, rather than
-        // re-walking the same source data twice.
-        val tmp = createManualBackup()
-        val moved = File(dir, tmp.name)
-        if (tmp.parentFile != dir) {
-            tmp.copyTo(moved, overwrite = true)
-            tmp.delete()
-        }
-        return moved
     }
 
     private suspend fun pruneAutoBackups() = withContext(Dispatchers.IO) {

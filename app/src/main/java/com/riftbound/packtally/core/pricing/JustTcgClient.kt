@@ -1,5 +1,6 @@
 package com.riftbound.packtally.core.pricing
 
+import com.riftbound.packtally.BuildConfig
 import com.riftbound.packtally.core.settings.SettingsRepository
 import com.riftbound.packtally.model.Variant
 import kotlinx.serialization.SerialName
@@ -49,7 +50,7 @@ class JustTcgClient(
         }
         val apiKey = settings.getApiKey()
             ?: error("Missing JustTCG API key — set it in Settings")
-        return api.postCards("Bearer-not-used: $apiKey".let { _ -> apiKey }, items)
+        return api.postCards(apiKey, items)
     }
 
     /** Variant → JustTCG (printing, condition) per the documented variant mapping. */
@@ -75,9 +76,17 @@ class JustTcgClient(
         }
 
         fun defaultOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
-            .addInterceptor(
-                HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC },
-            )
+            .apply {
+                // Only log in debug builds: keeps per-request logging overhead out
+                // of release and request metadata out of logcat on user devices.
+                if (BuildConfig.DEBUG) {
+                    addInterceptor(
+                        HttpLoggingInterceptor().apply {
+                            level = HttpLoggingInterceptor.Level.BASIC
+                        },
+                    )
+                }
+            }
             .build()
     }
 }

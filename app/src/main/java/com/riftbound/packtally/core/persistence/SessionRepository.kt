@@ -6,8 +6,10 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import com.riftbound.packtally.core.carddb.CardDatabase
+import com.riftbound.packtally.core.pricing.CachedOnlyModeException
 import com.riftbound.packtally.core.pricing.PriceRequest
 import com.riftbound.packtally.core.pricing.PricingRepository
+import com.riftbound.packtally.core.pricing.RateLimitedException
 import com.riftbound.packtally.model.BoxSession
 import com.riftbound.packtally.model.CardPrice
 import com.riftbound.packtally.model.PackSession
@@ -19,8 +21,10 @@ import com.riftbound.packtally.model.ScanSessionEntry
 import com.riftbound.packtally.model.ScanSessionStatus
 import com.riftbound.packtally.model.ScannedEntry
 import com.riftbound.packtally.model.Variant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -285,6 +289,194 @@ class SessionRepository(
         )
     }
 
+    /**
+     * Number of network calls a full [repriceAll] would make right now: one per
+     * batch of [MAX_PRICING_BATCH] distinct (tcgplayerId, variant) products that
+     * actually carry a tcgplayer id. Used to show the user a cost/time estimate
+     * before they commit to refreshing every price.
+     */
+    suspend fun repriceableCallEstimate(): Int = withContext(Dispatchers.IO) {
+        val distinct = dao.allScanSessionEntries()
+            .filter { !it.tcgplayerId.isNullOrBlank() }
+            .map { it.tcgplayerId to it.variant }
+            .distinct()
+        batchCountFor(distinct.size)
+    }
+
+    /**
+     * Force-refresh prices for the entire collection so displayed values are up
+     * to date.
+     *
+     * Unlike [submitPendingPrices] (which only touches PENDING/FAILED rows), this
+     * re-prices every priceable row regardless of status. Work is deduplicated to
+     * the distinct (tcgplayerId, variant) products so duplicates in the collection
+     * cost a single request each; the fetched price is then written to every row
+     * sharing that product.
+     *
+     * Rate limiting honours the JustTCG free tier (10 requests / minute): batches
+     * of [MAX_PRICING_BATCH] are one request each, and after every
+     * [RECALL_CALLS_PER_WINDOW] requests the call sleeps [RECALL_WINDOW_WAIT_SECONDS]
+     * seconds before the next window. [forceRefresh][PricingRepository.priceMany]
+     * bypasses the price cache so the values are genuinely fresh.
+     *
+     * If the daily/monthly quota wall is hit, or cache-only mode is on, the run
+     * stops early and reports it rather than marking everything failed.
+     */
+    suspend fun repriceAll(
+        pricing: PricingRepository,
+        onProgress: suspend (RepriceProgress) -> Unit = {},
+    ): SubmitResult = withContext(Dispatchers.IO) {
+        val all = dao.allScanSessionEntries()
+        if (all.isEmpty()) return@withContext SubmitResult.Empty
+
+        val (unpriceableRows, priceableRows) = all.partition { it.tcgplayerId.isNullOrBlank() }
+        unpriceableRows.forEach { row ->
+            if (row.pricingStatus != PricingStatus.UNPRICEABLE.name) {
+                dao.updateScanSessionEntry(
+                    row.copy(
+                        pricingStatus = PricingStatus.UNPRICEABLE.name,
+                        pricingError = "Missing tcgplayer_id",
+                    ),
+                )
+            }
+        }
+        if (priceableRows.isEmpty()) {
+            return@withContext SubmitResult.Done(0, 0, unpriceableRows.size, 0.0, 0)
+        }
+
+        val rowsByRequest: Map<PriceRequest, List<ScanSessionEntryEntity>> = priceableRows.groupBy { row ->
+            PriceRequest(tcgplayerId = row.tcgplayerId.orEmpty(), variant = row.variant.toVariant())
+        }
+        val chunks = rowsByRequest.keys.toList().chunked(MAX_PRICING_BATCH)
+
+        var priced = 0
+        var failed = 0
+        var totalValue = 0.0
+        var callsThisWindow = 0
+        var index = 0
+        var retriesForBatch = 0
+
+        while (index < chunks.size) {
+            if (callsThisWindow >= RECALL_CALLS_PER_WINDOW) {
+                waitForRateLimitWindow(onProgress, nextBatch = index + 1, totalBatches = chunks.size)
+                callsThisWindow = 0
+            }
+
+            val chunk = chunks[index]
+            onProgress(RepriceProgress.Pricing(currentBatch = index + 1, totalBatches = chunks.size))
+
+            val results = try {
+                pricing.priceMany(chunk, forceRefresh = true)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (exc: Exception) {
+                Log.e(TAG, "Reprice batch ${index + 1}/${chunks.size} failed", exc)
+                chunk.forEach { req ->
+                    rowsByRequest[req].orEmpty().forEach { row ->
+                        dao.updateScanSessionEntry(row.markFailed(exc.message ?: "Pricing request failed"))
+                        failed += 1
+                    }
+                }
+                callsThisWindow += 1
+                index += 1
+                retriesForBatch = 0
+                continue
+            }
+            callsThisWindow += 1
+
+            // A whole-batch rate-limit / cache-only failure is a transient or
+            // terminal quota condition, not a per-card failure — handle it before
+            // touching any rows so we never mark good cards FAILED.
+            val firstError = results[chunk.first()]?.exceptionOrNull()
+            val batchBlocked = chunk.all {
+                val e = results[it]?.exceptionOrNull()
+                e is RateLimitedException || e is CachedOnlyModeException
+            }
+            if (batchBlocked) {
+                when (firstError) {
+                    is CachedOnlyModeException ->
+                        return@withContext SubmitResult.Done(
+                            priced, failed, unpriceableRows.size, totalValue, index,
+                            stoppedReason = "Cache-only mode is on. Turn it off in Settings to refresh prices.",
+                        )
+                    is RateLimitedException -> {
+                        val s = firstError.state
+                        val hardWall = s.dailyUsed >= s.dailyLimit || s.monthlyUsed >= s.monthlyLimit
+                        if (hardWall) {
+                            return@withContext SubmitResult.Done(
+                                priced, failed, unpriceableRows.size, totalValue, index,
+                                stoppedReason = "JustTCG daily/monthly quota reached. Try again after it resets.",
+                            )
+                        }
+                        if (retriesForBatch < MAX_RATE_LIMIT_RETRIES) {
+                            retriesForBatch += 1
+                            waitForRateLimitWindow(onProgress, nextBatch = index + 1, totalBatches = chunks.size)
+                            callsThisWindow = 0
+                            continue // retry the same batch in the next minute window
+                        }
+                        // Give up on this batch only after exhausting retries.
+                    }
+                    else -> Unit
+                }
+            }
+
+            chunk.forEach { req ->
+                val rows = rowsByRequest[req].orEmpty()
+                val result = results[req]
+                if (result == null) {
+                    rows.forEach {
+                        dao.updateScanSessionEntry(it.markFailed("No price returned"))
+                        failed += 1
+                    }
+                    return@forEach
+                }
+                result.fold(
+                    onSuccess = { price ->
+                        val encoded = json.encodeToString(CardPrice.serializer(), price)
+                        rows.forEach { row ->
+                            dao.updateScanSessionEntry(
+                                row.copy(
+                                    priceJson = encoded,
+                                    pricingStatus = PricingStatus.PRICED.name,
+                                    pricingError = null,
+                                ),
+                            )
+                            priced += 1
+                            totalValue += price.marketPrice
+                        }
+                    },
+                    onFailure = { exc ->
+                        rows.forEach {
+                            dao.updateScanSessionEntry(it.markFailed(exc.message ?: "Pricing failed"))
+                            failed += 1
+                        }
+                    },
+                )
+            }
+            index += 1
+            retriesForBatch = 0
+        }
+
+        SubmitResult.Done(
+            priced = priced,
+            failed = failed,
+            unpriceable = unpriceableRows.size,
+            totalValue = totalValue,
+            batches = chunks.size,
+        )
+    }
+
+    private suspend fun waitForRateLimitWindow(
+        onProgress: suspend (RepriceProgress) -> Unit,
+        nextBatch: Int,
+        totalBatches: Int,
+    ) {
+        for (remaining in RECALL_WINDOW_WAIT_SECONDS downTo 1) {
+            onProgress(RepriceProgress.Waiting(remaining, nextBatch, totalBatches))
+            delay(1_000L)
+        }
+    }
+
     suspend fun migrateLegacyPacksIfNeeded(): LegacyMigrationResult = withContext(Dispatchers.IO) {
         val store = dataStore ?: return@withContext LegacyMigrationResult(alreadyRan = true)
         if (store.data.first()[KEY_LEGACY_PACK_MIGRATION_DONE] == true) {
@@ -498,6 +690,8 @@ class SessionRepository(
             val unpriceable: Int,
             val totalValue: Double,
             val batches: Int,
+            /** Non-null when the run stopped before finishing (e.g. quota wall). */
+            val stoppedReason: String? = null,
         ) : SubmitResult
     }
 
@@ -505,6 +699,12 @@ class SessionRepository(
         val currentBatch: Int,
         val totalBatches: Int,
     )
+
+    /** Progress for [repriceAll]: either pricing a batch, or sleeping out a rate-limit window. */
+    sealed interface RepriceProgress {
+        data class Pricing(val currentBatch: Int, val totalBatches: Int) : RepriceProgress
+        data class Waiting(val secondsRemaining: Int, val nextBatch: Int, val totalBatches: Int) : RepriceProgress
+    }
 
     data class LegacyMigrationResult(
         val sessionsCreated: Int = 0,
@@ -516,8 +716,25 @@ class SessionRepository(
     companion object {
         const val MAX_PRICING_BATCH = 20
 
+        /** JustTCG free tier allows 10 requests per rolling minute. */
+        const val RECALL_CALLS_PER_WINDOW = 10
+
+        /** Seconds to sleep between rate-limit windows during [repriceAll]. */
+        const val RECALL_WINDOW_WAIT_SECONDS = 60
+
+        /** How many times a single batch may wait-and-retry a minute-only rate limit. */
+        const val MAX_RATE_LIMIT_RETRIES = 2
+
         fun batchCountFor(cardCount: Int): Int =
             if (cardCount <= 0) 0 else ((cardCount - 1) / MAX_PRICING_BATCH) + 1
+
+        /** Number of 10-request windows a recall of [callCount] batches spans. */
+        fun recallWindowCount(callCount: Int): Int =
+            if (callCount <= 0) 0 else ((callCount - 1) / RECALL_CALLS_PER_WINDOW) + 1
+
+        /** Number of 60-second waits a recall of [callCount] batches incurs. */
+        fun recallWaitCount(callCount: Int): Int =
+            (recallWindowCount(callCount) - 1).coerceAtLeast(0)
 
         fun submitLabelFor(cardCount: Int): String = when {
             cardCount <= 0 -> "No pending prices"

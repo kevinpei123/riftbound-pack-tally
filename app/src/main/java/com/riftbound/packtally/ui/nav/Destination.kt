@@ -17,5 +17,5 @@ enum class Destination(
     Scanner("scanner", "Scan", Icons.Filled.CameraAlt),
     Current("current", "Current", Icons.AutoMirrored.Filled.ListAlt),
     Collection("collection", "Cards", Icons.Filled.Collections),
-    Settings("settings", "Set", Icons.Filled.Settings),
+    Settings("settings", "Settings", Icons.Filled.Settings),
 }

@@ -1,6 +1,9 @@
 package com.riftbound.packtally.feature.home
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,15 +11,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,6 +36,15 @@ import com.riftbound.packtally.model.ScanSession
 import com.riftbound.packtally.ui.currency.LocalCurrencyFormatter
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+
+/**
+ * Localized short date/time formatter for the "last finished session" timestamp.
+ * Hoisted to a top-level val so it is allocated once (not per recomposition) and
+ * follows the device locale / 12-24h preference instead of a hardcoded pattern.
+ */
+private val LAST_SESSION_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
 
 @Composable
 fun HomeScreen(
@@ -37,9 +55,17 @@ fun HomeScreen(
     val vm: HomeViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
 
+    if (state.isLoading) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -69,6 +95,7 @@ private fun PrimarySessionCard(
     onStart: () -> Unit,
     onContinue: () -> Unit,
 ) {
+    var showConfirm by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -95,19 +122,58 @@ private fun PrimarySessionCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(onClick = {}, label = { Text("${activeSession.totalCards} cards") })
-                    AssistChip(onClick = {}, label = { Text("${activeSession.pendingPriceCount} pending") })
+                    Text(
+                        "${activeSession.totalCards} cards",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "${activeSession.pendingPriceCount} to price",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onContinue, modifier = Modifier.weight(1f)) {
                         Text("Current list")
                     }
-                    OutlinedButton(onClick = onStart, modifier = Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { showConfirm = true }, modifier = Modifier.weight(1f)) {
                         Text("New")
                     }
                 }
             }
         }
+    }
+
+    if (showConfirm && activeSession != null) {
+        AlertDialog(
+            onDismissRequest = { showConfirm = false },
+            title = { Text("Start a new session?") },
+            text = {
+                Text(
+                    buildString {
+                        append("Your current session has ${activeSession.totalCards} cards")
+                        if (activeSession.pendingPriceCount > 0) {
+                            append(" and ${activeSession.pendingPriceCount} pending prices")
+                        }
+                        append(". Starting a new one will finish the current session.")
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConfirm = false
+                    onStart()
+                }) {
+                    Text("Start new")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirm = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 
@@ -132,7 +198,7 @@ private fun CollectionSummaryCard(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "$totalCards cards - $uniqueCards unique - $pendingPrices pending prices",
+                "$totalCards cards, $uniqueCards unique, $pendingPrices pending prices",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -165,10 +231,10 @@ private fun LastSessionCard(session: ScanSession?) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "${session.totalCards} cards - finished ${
+                    "${session.totalCards} cards, finished ${
                         session.completedAt
                             ?.atZone(ZoneId.systemDefault())
-                            ?.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                            ?.format(LAST_SESSION_FORMAT)
                             ?: "recently"
                     }",
                     style = MaterialTheme.typography.bodySmall,

@@ -16,7 +16,8 @@ submit prices only when explicitly requested.
   remove, change variant, clear, end the session, or submit pending prices.
 - **Collection**: aggregates all scan-session entries. Search, sort, group,
   filter by set/rarity/domain/variant/pending state, remove entries, add
-  manually, submit all pending prices, export JSON.
+  manually, submit all pending prices, **refresh all prices** (force-refetch the
+  whole collection, deduped per card), and export JSON.
 - **Settings**: JustTCG key, quota/cache controls, Riftcodex sync, automatic
   exchange-rate refresh, OCR diagnostics, backups.
 
@@ -34,6 +35,15 @@ in the database so existing rows can migrate into completed scan sessions.
   - 100 cards = 5 POSTs
 - Cache hits return locally and do not burn quota.
 - Cards without `tcgplayer_id` are marked unpriceable instead of crashing.
+- **Refresh all prices** (Collection) force-refetches every card, bypassing the
+  cache. Work is deduped to distinct `(tcgplayer_id, variant)` products, batched
+  20 per request, and rate-limited against JustTCG's 10-requests-per-minute
+  cap: once 7 of the 10 requests in the current minute window are used, each
+  further request backs off for 6 seconds before sending. If the window is
+  fully used (10/10), the remaining batch fails immediately with a rate-limit
+  error rather than waiting it out. There is no countdown UI. It stops early
+  and reports if the daily/monthly quota wall or cache-only mode is hit, and
+  writes each batch as it lands so partial progress is never lost.
 
 ## Card and Currency Data
 

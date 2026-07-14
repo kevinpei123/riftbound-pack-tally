@@ -16,6 +16,7 @@ class MockPricingRepository : PricingRepository {
 
     override suspend fun priceMany(
         requests: List<PriceRequest>,
+        forceRefresh: Boolean,
     ): Map<PriceRequest, Result<CardPrice>> {
         return requests.associate { req ->
             req to Result.success(fakePrice(req.variant))

@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -23,17 +22,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.riftbound.packtally.core.carddb.CardDatabase
+import com.riftbound.packtally.model.Rarity
 import com.riftbound.packtally.model.RiftboundCard
 import com.riftbound.packtally.model.Variant
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 private const val SEARCH_DEBOUNCE_MS = 250L
 
@@ -47,6 +53,14 @@ fun ManualAddSheet(
     var query by remember { mutableStateOf("") }
     var debounced by remember { mutableStateOf("") }
     var pickedCard by remember { mutableStateOf<RiftboundCard?>(null) }
+    val searchFocusRequester = remember { FocusRequester() }
+
+    // Search is the primary action of this sheet, so open the keyboard on the
+    // name field as soon as the sheet appears (and again after backing out of
+    // the variant picker).
+    LaunchedEffect(pickedCard) {
+        if (pickedCard == null) searchFocusRequester.requestFocus()
+    }
 
     LaunchedEffect(query) {
         if (query == debounced) return@LaunchedEffect
@@ -54,9 +68,9 @@ fun ManualAddSheet(
         debounced = query
     }
 
-    val results = remember(debounced) {
-        if (debounced.isBlank()) emptyList()
-        else CardDatabase.lookupByNameFuzzy(debounced, limit = 12)
+    val results by produceState(initialValue = emptyList<RiftboundCard>(), debounced) {
+        value = if (debounced.isBlank()) emptyList()
+                else withContext(Dispatchers.Default) { CardDatabase.lookupByNameFuzzy(debounced, limit = 12) }
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -74,8 +88,13 @@ fun ManualAddSheet(
                     onValueChange = { query = it },
                     label = { Text("Card name") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        imeAction = ImeAction.Search,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(searchFocusRequester),
                 )
                 when {
                     debounced.isBlank() -> Text(
@@ -109,7 +128,7 @@ fun ManualAddSheet(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        "${card.collectorNumber} - ${card.rarity.name.lowercase().replaceFirstChar { it.uppercase() }}",
+                        "${card.collectorNumber} - ${card.rarity.displayName()}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -126,10 +145,12 @@ fun ManualAddSheet(
                         onClick = { onPicked(card, Variant.FOIL) },
                         modifier = Modifier.weight(1f),
                     ) { Text("Foil") }
-                    Button(
-                        onClick = { onPicked(card, Variant.SIGNATURE) },
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Signature") }
+                    if (card.hasSignatureVariant) {
+                        Button(
+                            onClick = { onPicked(card, Variant.SIGNATURE) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Signature") }
+                    }
                 }
                 OutlinedButton(
                     onClick = { pickedCard = null },
@@ -147,7 +168,6 @@ private fun CardCandidateRow(card: RiftboundCard, onClick: () -> Unit) {
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(
             modifier = Modifier
@@ -162,11 +182,15 @@ private fun CardCandidateRow(card: RiftboundCard, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "${card.collectorNumber} - ${card.setCode} - " +
-                    card.rarity.name.lowercase().replaceFirstChar { it.uppercase() },
+                "${card.collectorNumber} - ${card.setCode} - ${card.rarity.displayName()}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
 }
+
+/** Title-cased rarity label (e.g. "Common"). Centralizes the formatting that was
+ * previously inlined at each call site in this sheet. */
+private fun Rarity.displayName(): String =
+    name.lowercase().replaceFirstChar { it.uppercase() }

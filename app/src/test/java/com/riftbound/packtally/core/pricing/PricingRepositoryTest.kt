@@ -4,6 +4,7 @@ import com.riftbound.packtally.model.CardPrice
 import com.riftbound.packtally.model.Variant
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -72,6 +73,51 @@ class PricingRepositoryTest {
     }
 
     @Test
+    fun `exact normal printing wins over higher foil fallback`() = runBlocking {
+        val client = FakeJustTcgClient()
+        val repo = JustTcgPricingRepository(client)
+        val standard = PriceRequest("653030", Variant.STANDARD)
+
+        val result = repo.priceMany(listOf(standard)).getValue(standard).getOrThrow()
+
+        assertEquals(0.5, result.marketPrice)
+    }
+
+    @Test
+    fun `standard request falls back when JustTCG only returns foil variant`() = runBlocking {
+        val client = FakeJustTcgClient(
+            variants = listOf(
+                JustTcgVariant(
+                    condition = "Near Mint",
+                    printing = "Foil",
+                    language = "English",
+                    price = 6.09,
+                    lastUpdated = "2026-05-28T00:00:00Z",
+                ),
+            ),
+        )
+        val repo = JustTcgPricingRepository(client)
+        val standard = PriceRequest("653030", Variant.STANDARD)
+
+        val result = repo.priceMany(listOf(standard)).getValue(standard).getOrThrow()
+
+        assertEquals(6.09, result.marketPrice)
+    }
+
+    @Test
+    fun `network request uses tcgplayer id only so local fallback can inspect all variants`() = runBlocking {
+        val client = FakeJustTcgClient()
+        val repo = JustTcgPricingRepository(client)
+
+        repo.priceMany(listOf(PriceRequest("653030", Variant.STANDARD)))
+
+        val posted = client.posts.single().single()
+        assertEquals("653030", posted.tcgplayerId)
+        assertNull(posted.condition)
+        assertNull(posted.printing)
+    }
+
+    @Test
     fun `cache hit does not call delegate and cache miss does`() = runBlocking {
         val delegate = CountingPricingRepository()
         val cache = CachedPricingRepository(
@@ -88,10 +134,51 @@ class PricingRepositoryTest {
         assertEquals(1, delegate.calls)
     }
 
+    @Test
+    fun `forceRefresh bypasses a fresh cache entry and refetches`() = runBlocking {
+        val delegate = CountingPricingRepository()
+        val cache = CachedPricingRepository(
+            delegate = delegate,
+            cacheDir = tempDir.toFile(),
+            ttlProvider = { Duration.ofHours(6) },
+            clock = { Instant.parse("2026-05-26T00:00:00Z") },
+        )
+        val request = PriceRequest("cached", Variant.STANDARD)
+
+        // Warm the cache.
+        cache.priceMany(listOf(request))
+        assertEquals(1, delegate.calls)
+
+        // A normal call would hit the still-fresh cache (no extra delegate call)...
+        cache.priceMany(listOf(request))
+        assertEquals(1, delegate.calls)
+
+        // ...but forceRefresh must go back to the network even though it is fresh.
+        cache.priceMany(listOf(request), forceRefresh = true)
+        assertEquals(2, delegate.calls)
+    }
+
     @TempDir
     lateinit var tempDir: Path
 
-    private class FakeJustTcgClient : JustTcgApiClient {
+    private class FakeJustTcgClient(
+        private val variants: List<JustTcgVariant> = listOf(
+            JustTcgVariant(
+                condition = "Near Mint",
+                printing = "Normal",
+                language = "English",
+                price = 0.5,
+                lastUpdated = "2026-05-26T00:00:00Z",
+            ),
+            JustTcgVariant(
+                condition = "Near Mint",
+                printing = "Foil",
+                language = "English",
+                price = 2.0,
+                lastUpdated = "2026-05-26T00:00:00Z",
+            ),
+        ),
+    ) : JustTcgApiClient {
         val posts = mutableListOf<List<JustTcgRequestItem>>()
 
         override suspend fun postCards(items: List<JustTcgRequestItem>): JustTcgBatchResponse {
@@ -100,22 +187,7 @@ class PricingRepositoryTest {
                 data = items.map { item ->
                     JustTcgCard(
                         tcgplayerId = item.tcgplayerId,
-                        variants = listOf(
-                            JustTcgVariant(
-                                condition = "Near Mint",
-                                printing = "Normal",
-                                language = "English",
-                                price = 0.5,
-                                lastUpdated = "2026-05-26T00:00:00Z",
-                            ),
-                            JustTcgVariant(
-                                condition = "Near Mint",
-                                printing = "Foil",
-                                language = "English",
-                                price = 2.0,
-                                lastUpdated = "2026-05-26T00:00:00Z",
-                            ),
-                        ),
+                        variants = variants,
                     )
                 },
             )
@@ -133,6 +205,7 @@ class PricingRepositoryTest {
 
         override suspend fun priceMany(
             requests: List<PriceRequest>,
+            forceRefresh: Boolean,
         ): Map<PriceRequest, Result<CardPrice>> {
             calls += 1
             return requests.associateWith {

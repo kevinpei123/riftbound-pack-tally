@@ -15,8 +15,17 @@ import com.riftbound.packtally.model.Variant
  */
 interface PricingRepository {
 
+    /**
+     * Price a batch of requests.
+     *
+     * @param forceRefresh when true, cache layers must bypass their stored
+     * entries and fetch fresh prices from the network (still writing the fresh
+     * results back to cache). Used by "refresh all prices" so the displayed
+     * values are genuinely up to date rather than served from a fresh-TTL cache.
+     */
     suspend fun priceMany(
         requests: List<PriceRequest>,
+        forceRefresh: Boolean = false,
     ): Map<PriceRequest, Result<CardPrice>>
 
     suspend fun price(request: PriceRequest): Result<CardPrice> =

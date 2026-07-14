@@ -26,7 +26,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -53,10 +52,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -79,6 +85,7 @@ fun CameraScreen(
     onCardCaptured: (Bitmap) -> Unit,
     modifier: Modifier = Modifier,
     guideRect: Rect = DEFAULT_GUIDE_RECT,
+    captureButtonBottomPadding: Dp = 32.dp,
     onError: (Throwable) -> Unit = { Log.e(TAG, "Capture failed", it) },
 ) {
     PermissionGate(modifier = modifier) {
@@ -86,6 +93,7 @@ fun CameraScreen(
             onCardCaptured = onCardCaptured,
             onError = onError,
             guideRect = guideRect,
+            captureButtonBottomPadding = captureButtonBottomPadding,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -97,6 +105,7 @@ private fun PermissionGate(
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -114,6 +123,21 @@ private fun PermissionGate(
 
     LaunchedEffect(Unit) {
         if (!hasPermission) launcher.launch(Manifest.permission.CAMERA)
+    }
+
+    // Re-check the permission when returning to the screen (e.g. after the user
+    // granted it from app settings) so the camera shows without a restart.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && !hasPermission) {
+                hasPermission = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.CAMERA,
+                ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     when {
@@ -157,6 +181,7 @@ private fun CameraSurface(
     onCardCaptured: (Bitmap) -> Unit,
     onError: (Throwable) -> Unit,
     guideRect: Rect,
+    captureButtonBottomPadding: Dp,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -166,14 +191,16 @@ private fun CameraSurface(
 
     val previewView = remember {
         PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FIT_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
         }
     }
 
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
+    var setupError by remember { mutableStateOf<Throwable?>(null) }
+    var retryKey by remember { mutableStateOf(0) }
     // Track only the use-cases THIS CameraScreen instance bound. ProcessCameraProvider
     // is a process-wide singleton; if we called unbindAll() from onDispose, a
     // late-firing teardown after the next tab's screen has already bound its
@@ -187,7 +214,7 @@ private fun CameraSurface(
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(retryKey) {
         try {
             val provider = ProcessCameraProvider.awaitInstance(context)
             cameraProvider = provider
@@ -222,8 +249,10 @@ private fun CameraSurface(
             )
             ownedUseCases.value = preview to capture
             imageCapture = capture
+            setupError = null
         } catch (e: Exception) {
             Log.e(TAG, "Camera setup failed", e)
+            setupError = e
             onError(e)
         }
     }
@@ -242,8 +271,7 @@ private fun CameraSurface(
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .fillMaxWidth()
-                .aspectRatio(9f / 16f),
+                .fillMaxSize(),
         ) {
             AndroidView(
                 factory = { previewView },
@@ -255,6 +283,7 @@ private fun CameraSurface(
             )
         }
 
+        val captureEnabled = imageCapture != null && !isCapturing
         FloatingActionButton(
             onClick = {
                 val capture = imageCapture ?: return@FloatingActionButton
@@ -277,7 +306,11 @@ private fun CameraSurface(
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 32.dp),
+                .padding(bottom = captureButtonBottomPadding)
+                .semantics {
+                    if (!captureEnabled) disabled()
+                    stateDescription = if (isCapturing) "Capturing" else "Ready"
+                },
             containerColor = if (isCapturing || imageCapture == null) {
                 MaterialTheme.colorScheme.surfaceVariant
             } else {
@@ -289,6 +322,45 @@ private fun CameraSurface(
                 contentDescription = "Capture card",
             )
         }
+
+        if (setupError != null) {
+            CameraErrorView(
+                modifier = Modifier.fillMaxSize(),
+                onRetry = {
+                    setupError = null
+                    retryKey++
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CameraErrorView(
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .background(Color.Black)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Camera unavailable",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "We couldn't start the camera. Try again.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.78f),
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = onRetry) { Text("Retry") }
+        }
     }
 }
 
@@ -297,8 +369,8 @@ private fun GuideOverlay(
     guideRect: Rect,
     modifier: Modifier = Modifier,
 ) {
-    val dim = Color.Black.copy(alpha = 0.55f)
-    val accent = Color.White
+    val accent = Color.White.copy(alpha = 0.92f)
+    val shadow = Color.Black.copy(alpha = 0.55f)
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
@@ -307,29 +379,41 @@ private fun GuideOverlay(
         val r = w * guideRect.right
         val b = h * guideRect.bottom
 
-        // Four dim strips around the guide rect
-        drawRect(dim, topLeft = Offset(0f, 0f), size = Size(w, t))
-        drawRect(dim, topLeft = Offset(0f, t), size = Size(l, b - t))
-        drawRect(dim, topLeft = Offset(r, t), size = Size(w - r, b - t))
-        drawRect(dim, topLeft = Offset(0f, b), size = Size(w, h - b))
+        // A light guide keeps the camera feed visible without creating masked
+        // regions that look like blank space at the top or sides.
+        val radius = 18.dp.toPx()
+        drawRoundRect(
+            color = shadow,
+            topLeft = Offset(l, t),
+            size = Size(r - l, b - t),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius),
+            style = Stroke(width = 7.dp.toPx()),
+        )
+        drawRoundRect(
+            color = accent.copy(alpha = 0.58f),
+            topLeft = Offset(l, t),
+            size = Size(r - l, b - t),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius),
+            style = Stroke(width = 2.dp.toPx()),
+        )
 
         // Corner brackets — easier to align against than a full border. Size in
         // dp so they stay visually consistent regardless of how big the guide
         // rect is on screen.
         val bracket = 28.dp.toPx()
-        val stroke = 4.dp.toPx()
-        // top-left
-        drawLine(accent, Offset(l, t), Offset(l + bracket, t), stroke)
-        drawLine(accent, Offset(l, t), Offset(l, t + bracket), stroke)
-        // top-right
-        drawLine(accent, Offset(r, t), Offset(r - bracket, t), stroke)
-        drawLine(accent, Offset(r, t), Offset(r, t + bracket), stroke)
-        // bottom-left
-        drawLine(accent, Offset(l, b), Offset(l + bracket, b), stroke)
-        drawLine(accent, Offset(l, b), Offset(l, b - bracket), stroke)
-        // bottom-right
-        drawLine(accent, Offset(r, b), Offset(r - bracket, b), stroke)
-        drawLine(accent, Offset(r, b), Offset(r, b - bracket), stroke)
+        fun drawBrackets(color: Color, stroke: Float) {
+            drawLine(color, Offset(l, t), Offset(l + bracket, t), stroke)
+            drawLine(color, Offset(l, t), Offset(l, t + bracket), stroke)
+            drawLine(color, Offset(r, t), Offset(r - bracket, t), stroke)
+            drawLine(color, Offset(r, t), Offset(r, t + bracket), stroke)
+            drawLine(color, Offset(l, b), Offset(l + bracket, b), stroke)
+            drawLine(color, Offset(l, b), Offset(l, b - bracket), stroke)
+            drawLine(color, Offset(r, b), Offset(r - bracket, b), stroke)
+            drawLine(color, Offset(r, b), Offset(r, b - bracket), stroke)
+        }
+
+        drawBrackets(shadow, 8.dp.toPx())
+        drawBrackets(accent, 4.dp.toPx())
     }
 }
 

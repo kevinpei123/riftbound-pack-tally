@@ -8,7 +8,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -18,6 +21,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -30,6 +36,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 private const val TAG = "FirstLaunch"
 
@@ -50,6 +59,7 @@ fun FirstLaunchScreen(onSyncComplete: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -75,12 +85,14 @@ fun FirstLaunchScreen(onSyncComplete: () -> Unit) {
                 Text(
                     "Fetching cards…",
                     style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
             is FirstLaunchState.Done -> {
                 Text(
                     "Loaded ${s.cardCount} cards.",
                     style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
             is FirstLaunchState.Failed -> {
@@ -89,10 +101,14 @@ fun FirstLaunchScreen(onSyncComplete: () -> Unit) {
                         s.reason,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     )
                 }
                 Spacer(Modifier.height(24.dp))
-                Button(onClick = vm::startSync) { Text("Retry") }
+                Button(
+                    onClick = vm::startSync,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text("Retry") }
             }
         }
     }
@@ -113,7 +129,11 @@ class FirstLaunchViewModel(application: Application) : AndroidViewModel(applicat
     val state: StateFlow<FirstLaunchState> = _state.asStateFlow()
 
     fun startSync() {
-        if (_state.value is FirstLaunchState.Syncing) return
+        // Guard against re-running an in-flight or already-completed sync; a fresh
+        // ViewModel's LaunchedEffect must not overwrite a Done state and re-fetch.
+        // Failed stays re-runnable for the Retry button.
+        val current = _state.value
+        if (current is FirstLaunchState.Syncing || current is FirstLaunchState.Done) return
         _state.value = FirstLaunchState.Syncing
         viewModelScope.launch {
             try {
@@ -123,9 +143,17 @@ class FirstLaunchViewModel(application: Application) : AndroidViewModel(applicat
                 _state.value = FirstLaunchState.Done(count)
             } catch (e: Throwable) {
                 Log.e(TAG, "Riftcodex sync failed", e)
-                _state.value = FirstLaunchState.Failed(
-                    e.message ?: "Sync failed — check your network and try again.",
-                )
+                val message = when (e) {
+                    is UnknownHostException, is ConnectException ->
+                        "No internet connection. Check your network and tap Retry."
+                    is SocketTimeoutException ->
+                        "The server took too long to respond. Tap Retry."
+                    is retrofit2.HttpException ->
+                        "Card service is temporarily unavailable (error ${e.code()}). Tap Retry."
+                    else ->
+                        "Couldn't set up the card database. Tap Retry, or try again later."
+                }
+                _state.value = FirstLaunchState.Failed(message)
             }
         }
     }

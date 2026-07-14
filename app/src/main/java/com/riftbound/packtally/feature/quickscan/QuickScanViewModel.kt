@@ -114,18 +114,27 @@ class QuickScanViewModel(application: Application) : AndroidViewModel(applicatio
     val lastAdded: StateFlow<String?> = _lastAdded.asStateFlow()
 
     init {
-        // Seed the pending counter with whatever's already in the loose-scan
-        // table — manually-added cards (Collection → "+ Add card") and previous
-        // quick-scans that never got submitted both live here. Without this seed
-        // the Submit button only appears for cards added in *this* session,
-        // making manual adds invisible until the user navigates away and back.
+        refreshPending()
+    }
+
+    /**
+     * Re-seed the pending counter from whatever's already in the loose-scan
+     * table — manually-added cards (Collection → "+ Add card") and previous
+     * quick-scans that never got submitted both live here. Without this seed
+     * the Submit button only appears for cards added in *this* session,
+     * making manual adds invisible until the user navigates away and back.
+     *
+     * Called from init and again on screen re-entry: clearSessionStats() (run
+     * from the screen's onDispose) resets cardsAdded to 0, so if the ViewModel
+     * survives a dispose/recompose on the nav back-stack we must re-read pending
+     * rather than relying solely on the one-time init seed.
+     */
+    fun refreshPending() {
         viewModelScope.launch {
             val pending = runCatching { looseScans.getPending() }
-                .onFailure { Log.w(TAG, "Couldn't read pending loose scans on init", it) }
+                .onFailure { Log.w(TAG, "Couldn't read pending loose scans", it) }
                 .getOrDefault(emptyList())
-            if (pending.isNotEmpty()) {
-                _stats.update { it.copy(pendingCount = pending.size) }
-            }
+            _stats.update { it.copy(pendingCount = pending.size) }
         }
     }
 
@@ -139,9 +148,11 @@ class QuickScanViewModel(application: Application) : AndroidViewModel(applicatio
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
             // Rapid mode: an unambiguous identification skips the sheet and
-            // records the card as STANDARD straight away.
+            // records the card as STANDARD straight away. Persist inline (no
+            // nested coroutine, never touching Saved) so the camera only returns
+            // to live preview after the save + stats update have completed.
             if (_rapidMode.value && result is QuickScanState.Identified) {
-                confirmVariant(result.card, Variant.STANDARD)
+                persistScan(result.card, Variant.STANDARD)
                 _ocrFailureCount.value = 0
                 _state.value = QuickScanState.CameraReady
                 return@launch
@@ -169,12 +180,21 @@ class QuickScanViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun confirmVariant(card: RiftboundCard, variant: Variant) {
         viewModelScope.launch {
-            runCatching { looseScans.saveEntry(card, variant, price = null) }
-                .onFailure { Log.e(TAG, "Saving loose scan failed", it) }
-            _stats.update { it.copy(cardsAdded = it.cardsAdded + 1, pendingCount = it.pendingCount + 1) }
-            _lastAdded.value = card.name
+            persistScan(card, variant)
             _state.value = QuickScanState.Saved(card, variant)
         }
+    }
+
+    /**
+     * Persist a single scanned card and update the session tally. Shared by the
+     * variant-chooser path ([confirmVariant]) and the rapid-mode auto-save path
+     * so both go through the exact same save + stats sequence without racing.
+     */
+    private suspend fun persistScan(card: RiftboundCard, variant: Variant) {
+        runCatching { looseScans.saveEntry(card, variant, price = null) }
+            .onFailure { Log.e(TAG, "Saving loose scan failed", it) }
+        _stats.update { it.copy(cardsAdded = it.cardsAdded + 1, pendingCount = it.pendingCount + 1) }
+        _lastAdded.value = card.name
     }
 
     /**

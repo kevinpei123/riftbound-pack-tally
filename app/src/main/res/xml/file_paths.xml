@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Collection JSON exports are written to getExternalFilesDir(null); expose that
+         directory to the FileProvider so the share sheet can grant read access. -->
+    <external-files-path name="exports" path="." />
+</paths>

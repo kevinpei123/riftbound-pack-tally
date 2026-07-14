@@ -2,6 +2,7 @@ package com.riftbound.packtally.core.pricing
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -143,10 +144,12 @@ class QuotaTracker(
 
     fun setUseCachedOnly(value: Boolean) {
         _useCachedOnly.value = value
+        scope.launch { dataStore.edit { it[USE_CACHED_ONLY_KEY] = value } }
     }
 
     private suspend fun refresh() {
         refreshKeysIfRolled()
+        _useCachedOnly.value = dataStore.data.first()[USE_CACHED_ONLY_KEY] ?: false
         _state.value = readSnapshot()
     }
 
@@ -177,6 +180,7 @@ class QuotaTracker(
             lastObservedMonth = month
             snackbarShownThisSession = false
             _useCachedOnly.value = false
+            scope.launch { dataStore.edit { it[USE_CACHED_ONLY_KEY] = false } }
             rolled = true
         }
         if (date != lastObservedDate) {
@@ -261,6 +265,7 @@ class QuotaTracker(
         private val LAST_MONTH_KEY = stringPreferencesKey("quota_last_month")
         private val LAST_DATE_KEY = stringPreferencesKey("quota_last_date")
         private val LAST_MINUTE_KEY = stringPreferencesKey("quota_last_minute")
+        private val USE_CACHED_ONLY_KEY = booleanPreferencesKey("quota_use_cached_only")
     }
 }
 

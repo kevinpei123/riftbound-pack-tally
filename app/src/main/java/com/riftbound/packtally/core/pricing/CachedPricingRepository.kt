@@ -46,6 +46,7 @@ class CachedPricingRepository(
 
     override suspend fun priceMany(
         requests: List<PriceRequest>,
+        forceRefresh: Boolean,
     ): Map<PriceRequest, Result<CardPrice>> {
         if (requests.isEmpty()) return emptyMap()
 
@@ -54,7 +55,9 @@ class CachedPricingRepository(
         val misses = mutableListOf<PriceRequest>()
 
         for (req in requests.distinctBy { it.tcgplayerId to it.variant }) {
-            val cached = readFresh(req, ttl)
+            // forceRefresh skips the cache so "refresh all prices" always pulls
+            // fresh values; successful fetches are still written back below.
+            val cached = if (forceRefresh) null else readFresh(req, ttl)
             if (cached != null) {
                 results[req] = Result.success(cached)
             } else {
@@ -64,7 +67,7 @@ class CachedPricingRepository(
 
         if (misses.isEmpty()) return results
 
-        val fetched = delegate.priceMany(misses)
+        val fetched = delegate.priceMany(misses, forceRefresh)
         for ((request, result) in fetched) {
             result.onSuccess { price ->
                 write(req = request, price = price)

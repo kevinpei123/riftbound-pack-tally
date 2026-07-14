@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -29,6 +30,7 @@ sealed interface CurrentSessionEvent {
     data object Undone : CurrentSessionEvent
     data object Cleared : CurrentSessionEvent
     data object Completed : CurrentSessionEvent
+    data object Renamed : CurrentSessionEvent
     data class PricingDone(val priced: Int, val failed: Int, val unpriceable: Int) : CurrentSessionEvent
     data class Error(val message: String) : CurrentSessionEvent
 }
@@ -38,12 +40,22 @@ class CurrentSessionViewModel(application: Application) : AndroidViewModel(appli
     private val app = application as App
     private val repository: SessionRepository = app.sessionRepository
 
+    private val _isLoading = MutableStateFlow(true)
+
+    /**
+     * True until [observeActiveSession] emits for the first time, letting the UI tell
+     * "still reading the DB" apart from "there is genuinely no active session".
+     */
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
     val activeSession: StateFlow<ScanSession?> =
-        repository.observeActiveSession().stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = null,
-        )
+        repository.observeActiveSession()
+            .onEach { _isLoading.value = false }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.Eagerly,
+                initialValue = null,
+            )
 
     private val _submitInFlight = MutableStateFlow(false)
     val submitInFlight: StateFlow<Boolean> = _submitInFlight.asStateFlow()
@@ -115,6 +127,19 @@ class CurrentSessionViewModel(application: Application) : AndroidViewModel(appli
             runCatching { repository.completeActiveSession() }
                 .onSuccess { _events.emit(CurrentSessionEvent.Completed) }
                 .onFailure { emitError("Could not complete session", it) }
+        }
+    }
+
+    fun renameSession(name: String?) {
+        viewModelScope.launch {
+            val sessionId = activeSession.value?.id
+            if (sessionId == null) {
+                _events.emit(CurrentSessionEvent.Error("No active session"))
+                return@launch
+            }
+            runCatching { repository.renameSession(sessionId, name) }
+                .onSuccess { _events.emit(CurrentSessionEvent.Renamed) }
+                .onFailure { emitError("Could not rename session", it) }
         }
     }
 

@@ -83,7 +83,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
                 refresh()
             }.onFailure { exc ->
                 Log.e(TAG, "Backup failed", exc)
-                _events.emit(BackupEvent.BackupFailed(exc.message ?: "Backup failed"))
+                _events.emit(BackupEvent.BackupFailed(friendlyBackupError(exc)))
                 _summary.update { it.copy(isBusy = false) }
             }
         }
@@ -95,3 +95,12 @@ private fun File.toBackupFile(): BackupFile = BackupFile(
     sizeBytes = length(),
     createdAt = Instant.ofEpochMilli(lastModified()),
 )
+
+/** Map raw exception text to user-friendly copy instead of surfacing stack-trace messages. */
+private fun friendlyBackupError(exc: Throwable): String = when (exc) {
+    is java.io.IOException ->
+        "Couldn't write the backup — check that there's free storage space and try again."
+    is SecurityException ->
+        "Couldn't access storage to save the backup."
+    else -> "Backup failed. Please try again."
+}

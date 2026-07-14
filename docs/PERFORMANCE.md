@@ -7,7 +7,7 @@ Device measured: Huawei VOG-L09 / Android 10 / `arm64-v8a` where noted
 
 | Metric | Target | Actual | Status | How measured |
 |---|---:|---:|---|---|
-| Debug APK size | < 50 MiB | 76.66 MiB | Miss | `Get-Item app/build/outputs/apk/debug/app-debug.apk` = 80,378,705 bytes |
+| Debug APK size | < 50 MiB | 76.77 MiB | Miss | `Get-Item app/build/outputs/apk/debug/app-debug.apk` = 80,503,816 bytes |
 | Baseline debug APK size | < 50 MiB | 104.38 MiB | Baseline | Same command before ABI filter |
 | Synced cold start to first activity | < 2s | 1.561s | Pass | `adb shell am start -W -n com.riftbound.packtally/.MainActivity` |
 | Fresh-install first launch | < 2s first frame | 1.833s | Pass | Same command after uninstall/install; sync continues after first frame |
@@ -27,7 +27,7 @@ Final debug APK contents are dominated by:
 - `lib/arm64-v8a/libmlkit_google_ocr_pipeline.so`: about 9.54 MiB.
 - Bundled ML Kit text-recognition models under `assets/mlkit-google-ocr-models`.
 
-The app now filters native libraries to `arm64-v8a`, matching the P30 Pro/VOG-L09 test target. This cut the debug APK by about 27.72 MiB, but the unminified debug build remains above target. Keep the filter in mind if testing on x86/x86_64 emulators.
+The app now filters native libraries to `arm64-v8a`, matching the P30 Pro/VOG-L09 test target. This cut the debug APK by about 27.61 MiB, but the unminified debug build remains above target. Keep the filter in mind if testing on x86/x86_64 emulators.
 
 ## Startup Notes
 

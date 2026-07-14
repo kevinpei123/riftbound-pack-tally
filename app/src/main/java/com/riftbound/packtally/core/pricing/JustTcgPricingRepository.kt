@@ -28,8 +28,9 @@ private const val INTER_BATCH_DELAY_MS = 100L
  *    (the batch counts as 1 request regardless of item count) + apply server
  *    hints from `_metadata`.
  *
- * Among the matching variants in a response, English wins; if no English, the
- * highest-priced variant.
+ * Among exact matching variants in a response, English wins. If JustTCG has no
+ * exact printing match, fall back to a same-condition English/highest variant
+ * so cards whose product listing only exposes foil rows can still be priced.
  */
 class JustTcgPricingRepository(
     private val client: JustTcgApiClient,
@@ -38,7 +39,10 @@ class JustTcgPricingRepository(
 
     override suspend fun priceMany(
         requests: List<PriceRequest>,
+        forceRefresh: Boolean,
     ): Map<PriceRequest, Result<CardPrice>> {
+        // forceRefresh is a no-op here: this repository always hits the network.
+        // The flag only matters to cache decorators wrapping this one.
         if (requests.isEmpty()) return emptyMap()
 
         val results = mutableMapOf<PriceRequest, Result<CardPrice>>()
@@ -70,11 +74,13 @@ class JustTcgPricingRepository(
             }
 
             val items = chunk.map { req ->
-                val filter = client.filterFor(req.variant)
+                // Do not pre-filter by printing/condition at the API boundary.
+                // Some Riftbound TCGPlayer products only expose a foil listing;
+                // fetching the product by id lets local exact/fallback variant
+                // matching price those cards instead of turning them into false
+                // failures.
                 JustTcgRequestItem(
                     tcgplayerId = req.tcgplayerId,
-                    condition = filter.condition,
-                    printing = filter.printing,
                 )
             }
 
@@ -125,13 +131,17 @@ class JustTcgPricingRepository(
         filter: VariantFilter,
     ): JustTcgVariant? {
         val matching = variants.filter {
-            it.printing.equals(filter.printing, ignoreCase = true) &&
-                it.condition.equals(filter.condition, ignoreCase = true)
+            it.printing.matchesJustTcgValue(filter.printing) &&
+                it.condition.matchesJustTcgValue(filter.condition)
         }
-        if (matching.isEmpty()) return null
-        val english = matching.firstOrNull { it.language.equals("English", ignoreCase = true) }
-        if (english != null) return english
-        return matching.maxByOrNull { it.price ?: 0.0 }
+        matching.bestVariantOrNull()?.let { return it }
+
+        val sameCondition = variants.filter {
+            it.condition.matchesJustTcgValue(filter.condition)
+        }
+        sameCondition.bestVariantOrNull()?.let { return it }
+
+        return variants.bestVariantOrNull()
     }
 
     private fun JustTcgVariant.toCardPrice(): CardPrice? {
@@ -162,6 +172,25 @@ private fun Throwable.toPricingException(): Throwable {
         else -> this
     }
 }
+
+private fun List<JustTcgVariant>.bestVariantOrNull(): JustTcgVariant? {
+    if (isEmpty()) return null
+    val english = filter { it.language.matchesJustTcgValue("English") }
+    val pool = english.ifEmpty { this }
+    return pool.maxByOrNull { it.bestKnownPrice() }
+}
+
+private fun JustTcgVariant.bestKnownPrice(): Double =
+    price ?: midPrice ?: highPrice ?: lowPrice ?: 0.0
+
+private fun String?.matchesJustTcgValue(expected: String): Boolean =
+    this.normalizeJustTcgValue() == expected.normalizeJustTcgValue()
+
+private fun String?.normalizeJustTcgValue(): String =
+    orEmpty()
+        .trim()
+        .lowercase()
+        .filter { it.isLetterOrDigit() }
 
 class NoMatchingVariantException(
     val tcgplayerId: String,

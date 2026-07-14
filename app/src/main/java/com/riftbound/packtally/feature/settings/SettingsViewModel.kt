@@ -15,6 +15,7 @@ import com.riftbound.packtally.core.settings.Currency
 import com.riftbound.packtally.core.settings.SettingsRepository
 import kotlinx.coroutines.flow.SharingStarted as SS
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -72,7 +73,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _exchangeRateRefreshing = MutableStateFlow(false)
     val exchangeRateRefreshing: StateFlow<Boolean> = _exchangeRateRefreshing.asStateFlow()
 
-    private val _events = MutableSharedFlow<SettingsEvent>()
+    private val _events = MutableSharedFlow<SettingsEvent>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
     val events: SharedFlow<SettingsEvent> = _events.asSharedFlow()
 
     init {
@@ -102,10 +106,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             _exchangeRateRefreshing.value = false
             emitExchangeRateResult(result)
         }
-    }
-
-    fun setConversionRate(rate: Double) {
-        viewModelScope.launch { settingsRepository.setConversionRate(rate) }
     }
 
     fun refreshExchangeRate() {
