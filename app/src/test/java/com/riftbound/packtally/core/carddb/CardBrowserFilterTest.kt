@@ -7,9 +7,9 @@ import org.junit.jupiter.api.Test
 
 class CardBrowserFilterTest {
 
-    private val annie = card(id = "annie", name = "Annie, Fiery", setCode = "OGN", number = "001", rarity = Rarity.COMMON, domains = listOf("Fury"))
-    private val jinx = card(id = "jinx", name = "Jinx, Loose Cannon", setCode = "OGN", number = "002", rarity = Rarity.EPIC, domains = listOf("Fury", "Chaos"))
-    private val vilemaw = card(id = "vile", name = "Vilemaw", setCode = "UNL", number = "156", rarity = Rarity.RARE, domains = listOf("Chaos"))
+    private val annie = card(id = "annie", name = "Annie, Fiery", setCode = "OGN", number = "001", rarity = Rarity.COMMON, domains = listOf("Fury"), type = "unit", energy = 1, might = 2, power = 1)
+    private val jinx = card(id = "jinx", name = "Jinx, Loose Cannon", setCode = "OGN", number = "002", rarity = Rarity.EPIC, domains = listOf("Fury", "Chaos"), type = "unit", energy = 3, might = 4, power = 3)
+    private val vilemaw = card(id = "vile", name = "Vilemaw", setCode = "UNL", number = "156", rarity = Rarity.RARE, domains = listOf("Chaos"), type = "rune")
     private val all = listOf(annie, jinx, vilemaw)
 
     @Test
@@ -74,6 +74,29 @@ class CardBrowserFilterTest {
         assertEquals(listOf("Chaos", "Fury"), CardBrowserFilter.availableDomains(all))
     }
 
+    @Test
+    fun `type filter restricts to matching types`() {
+        assertEquals(listOf(annie, jinx), CardBrowserFilter.apply(all, CardBrowserQuery(types = setOf("unit"))))
+        assertEquals(listOf(vilemaw), CardBrowserFilter.apply(all, CardBrowserQuery(types = setOf("rune"))))
+    }
+
+    @Test
+    fun `energy might and power filters match exact values and exclude missing stats`() {
+        assertEquals(listOf(annie), CardBrowserFilter.apply(all, CardBrowserQuery(energyValues = setOf(1))))
+        assertEquals(listOf(jinx), CardBrowserFilter.apply(all, CardBrowserQuery(mightValues = setOf(4))))
+        assertEquals(listOf(annie, jinx), CardBrowserFilter.apply(all, CardBrowserQuery(powerValues = setOf(1, 3))))
+        // vilemaw has no energy/might/power — an active numeric filter never matches it.
+        assertEquals(emptyList<RiftboundCard>(), CardBrowserFilter.apply(all, CardBrowserQuery(energyValues = setOf(99))))
+    }
+
+    @Test
+    fun `available types and stat values are distinct sorted and skip missing values`() {
+        assertEquals(listOf("rune", "unit"), CardBrowserFilter.availableTypes(all))
+        assertEquals(listOf(1, 3), CardBrowserFilter.availableEnergyValues(all))
+        assertEquals(listOf(2, 4), CardBrowserFilter.availableMightValues(all))
+        assertEquals(listOf(1, 3), CardBrowserFilter.availablePowerValues(all))
+    }
+
     private fun card(
         id: String,
         name: String,
@@ -81,6 +104,10 @@ class CardBrowserFilterTest {
         number: String,
         rarity: Rarity,
         domains: List<String> = emptyList(),
+        type: String = "",
+        energy: Int? = null,
+        might: Int? = null,
+        power: Int? = null,
     ): RiftboundCard = RiftboundCard(
         id = id,
         collectorNumber = "$setCode-$number",
@@ -91,5 +118,9 @@ class CardBrowserFilterTest {
         hasSignatureVariant = false,
         tcgplayerId = id,
         domains = domains,
+        type = type,
+        energy = energy,
+        might = might,
+        power = power,
     )
 }

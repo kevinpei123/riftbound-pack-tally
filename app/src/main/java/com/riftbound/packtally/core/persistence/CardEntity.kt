@@ -27,6 +27,11 @@ data class CardEntity(
     val hasAlternateArt: Boolean = false,
     val imageUrl: String? = null,
     val domains: String = "",
+    /** Riftcodex `classification.type`, e.g. "unit", "gear", "rune". Empty when unknown. */
+    val type: String = "",
+    val energy: Int? = null,
+    val might: Int? = null,
+    val power: Int? = null,
 )
 
 @Dao

@@ -113,6 +113,19 @@ private fun CardDetailContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            val statsLine = buildList {
+                if (card.type.isNotBlank()) add(card.type.replaceFirstChar { it.uppercase() })
+                card.energy?.let { add("Energy $it") }
+                card.might?.let { add("Might $it") }
+                card.power?.let { add("Power $it") }
+            }.joinToString(" • ")
+            if (statsLine.isNotEmpty()) {
+                Text(
+                    statsLine,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

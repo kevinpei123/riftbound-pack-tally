@@ -124,6 +124,10 @@ class CardDbSync(
                 ?.filter { it.isNotBlank() }
                 ?.joinToString("|")
                 .orEmpty(),
+            type = (classification?.type ?: "").lowercase(),
+            energy = attributes?.energy,
+            might = attributes?.might,
+            power = attributes?.power,
         )
     }
 
@@ -146,6 +150,10 @@ fun CardEntity.toRiftboundCard(): com.riftbound.packtally.model.RiftboundCard =
         hasAlternateArt = hasAlternateArt,
         imageUrl = imageUrl,
         domains = domains.split('|').map { it.trim() }.filter { it.isNotBlank() },
+        type = type,
+        energy = energy,
+        might = might,
+        power = power,
     )
 
 private fun parseRarity(s: String): Rarity = when (s.lowercase()) {

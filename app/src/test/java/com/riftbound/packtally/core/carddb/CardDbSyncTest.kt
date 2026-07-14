@@ -84,6 +84,49 @@ class CardDbSyncTest {
     }
 
     @Test
+    fun `type and attributes are persisted for the card browser filters`() = runBlocking {
+        val dao = FakeCardDao(mutableListOf())
+        val sync = CardDbSync(
+            FakeSource(
+                listOf(
+                    dto(id = "stats", tcgplayerId = "123", riftboundId = "unl-060-219").copy(
+                        classification = RiftcodexClassification(rarity = "rare", type = "Unit"),
+                        attributes = RiftcodexAttributes(energy = 3, might = 5, power = 2),
+                    ),
+                ),
+            ),
+            dao,
+            freshDataStore(),
+        )
+
+        sync.runFullSync()
+
+        val row = dao.rows.single()
+        assertEquals("unit", row.type)
+        assertEquals(3, row.energy)
+        assertEquals(5, row.might)
+        assertEquals(2, row.power)
+    }
+
+    @Test
+    fun `missing attributes leave nullable stat columns null`() = runBlocking {
+        val dao = FakeCardDao(mutableListOf())
+        val sync = CardDbSync(
+            FakeSource(listOf(dto(id = "no-stats", tcgplayerId = "123", riftboundId = "unl-060-219"))),
+            dao,
+            freshDataStore(),
+        )
+
+        sync.runFullSync()
+
+        val row = dao.rows.single()
+        assertEquals("", row.type)
+        assertEquals(null, row.energy)
+        assertEquals(null, row.might)
+        assertEquals(null, row.power)
+    }
+
+    @Test
     fun `network failure leaves existing database safe`() = runBlocking {
         val dao = FakeCardDao(mutableListOf(entity(id = "kept")))
         val sync = CardDbSync(FailingSource, dao, freshDataStore())

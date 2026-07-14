@@ -92,6 +92,18 @@ fun CardBrowserScreen(
                 availableDomains = state.availableDomains,
                 selectedDomains = state.query.domains,
                 onToggleDomain = vm::toggleDomain,
+                availableTypes = state.availableTypes,
+                selectedTypes = state.query.types,
+                onToggleType = vm::toggleType,
+                availableEnergyValues = state.availableEnergyValues,
+                selectedEnergyValues = state.query.energyValues,
+                onToggleEnergyValue = vm::toggleEnergyValue,
+                availableMightValues = state.availableMightValues,
+                selectedMightValues = state.query.mightValues,
+                onToggleMightValue = vm::toggleMightValue,
+                availablePowerValues = state.availablePowerValues,
+                selectedPowerValues = state.query.powerValues,
+                onTogglePowerValue = vm::togglePowerValue,
                 onClear = vm::clearFilters,
             )
             Text(
@@ -167,9 +179,24 @@ private fun FilterChipsRow(
     availableDomains: List<String>,
     selectedDomains: Set<String>,
     onToggleDomain: (String) -> Unit,
+    availableTypes: List<String>,
+    selectedTypes: Set<String>,
+    onToggleType: (String) -> Unit,
+    availableEnergyValues: List<Int>,
+    selectedEnergyValues: Set<Int>,
+    onToggleEnergyValue: (Int) -> Unit,
+    availableMightValues: List<Int>,
+    selectedMightValues: Set<Int>,
+    onToggleMightValue: (Int) -> Unit,
+    availablePowerValues: List<Int>,
+    selectedPowerValues: Set<Int>,
+    onTogglePowerValue: (Int) -> Unit,
     onClear: () -> Unit,
 ) {
-    val hasFilters = selectedSetCodes.isNotEmpty() || selectedRarities.isNotEmpty() || selectedDomains.isNotEmpty()
+    val hasFilters = selectedSetCodes.isNotEmpty() || selectedRarities.isNotEmpty() ||
+        selectedDomains.isNotEmpty() || selectedTypes.isNotEmpty() ||
+        selectedEnergyValues.isNotEmpty() || selectedMightValues.isNotEmpty() ||
+        selectedPowerValues.isNotEmpty()
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
@@ -189,11 +216,39 @@ private fun FilterChipsRow(
                 label = { Text(domain) },
             )
         }
+        items(availableTypes) { type ->
+            FilterChip(
+                selected = type in selectedTypes,
+                onClick = { onToggleType(type) },
+                label = { Text(type.replaceFirstChar { it.uppercase() }) },
+            )
+        }
         items(availableSetCodes) { setCode ->
             FilterChip(
                 selected = setCode in selectedSetCodes,
                 onClick = { onToggleSetCode(setCode) },
                 label = { Text(setCode) },
+            )
+        }
+        items(availableEnergyValues) { value ->
+            FilterChip(
+                selected = value in selectedEnergyValues,
+                onClick = { onToggleEnergyValue(value) },
+                label = { Text("Energy $value") },
+            )
+        }
+        items(availableMightValues) { value ->
+            FilterChip(
+                selected = value in selectedMightValues,
+                onClick = { onToggleMightValue(value) },
+                label = { Text("Might $value") },
+            )
+        }
+        items(availablePowerValues) { value ->
+            FilterChip(
+                selected = value in selectedPowerValues,
+                onClick = { onTogglePowerValue(value) },
+                label = { Text("Power $value") },
             )
         }
         if (hasFilters) {

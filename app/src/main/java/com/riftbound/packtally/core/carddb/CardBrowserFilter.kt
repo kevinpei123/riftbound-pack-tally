@@ -11,14 +11,21 @@ enum class CardSortOrder {
 }
 
 /**
- * Card browser filter/sort state. Empty [setCodes]/[rarities]/[domains] mean
- * "no restriction on this facet" rather than "match nothing."
+ * Card browser filter/sort state. Empty sets mean "no restriction on this
+ * facet" rather than "match nothing" — including for the numeric facets
+ * ([energyValues]/[mightValues]/[powerValues]), which filter on exact values
+ * (Riftbound's energy/might/power range over a handful of small integers, so
+ * discrete chips read better than a slider).
  */
 data class CardBrowserQuery(
     val search: String = "",
     val setCodes: Set<String> = emptySet(),
     val rarities: Set<Rarity> = emptySet(),
     val domains: Set<String> = emptySet(),
+    val types: Set<String> = emptySet(),
+    val energyValues: Set<Int> = emptySet(),
+    val mightValues: Set<Int> = emptySet(),
+    val powerValues: Set<Int> = emptySet(),
     val sortOrder: CardSortOrder = CardSortOrder.NAME_ASC,
 )
 
@@ -35,9 +42,19 @@ object CardBrowserFilter {
             matchesSearch(card, needle) &&
                 (query.setCodes.isEmpty() || card.setCode in query.setCodes) &&
                 (query.rarities.isEmpty() || card.rarity in query.rarities) &&
-                (query.domains.isEmpty() || card.domains.any { it in query.domains })
+                (query.domains.isEmpty() || card.domains.any { it in query.domains }) &&
+                (query.types.isEmpty() || card.type in query.types) &&
+                matchesValues(card.energy, query.energyValues) &&
+                matchesValues(card.might, query.mightValues) &&
+                matchesValues(card.power, query.powerValues)
         }
         return sort(filtered, query.sortOrder)
+    }
+
+    /** An empty set means unrestricted; a card missing the stat never matches an active filter. */
+    private fun matchesValues(value: Int?, allowed: Set<Int>): Boolean {
+        if (allowed.isEmpty()) return true
+        return value != null && value in allowed
     }
 
     private fun matchesSearch(card: RiftboundCard, needle: String): Boolean {
@@ -63,4 +80,16 @@ object CardBrowserFilter {
 
     fun availableDomains(cards: List<RiftboundCard>): List<String> =
         cards.flatMap { it.domains }.distinct().sorted()
+
+    fun availableTypes(cards: List<RiftboundCard>): List<String> =
+        cards.map { it.type }.filter { it.isNotBlank() }.distinct().sorted()
+
+    fun availableEnergyValues(cards: List<RiftboundCard>): List<Int> =
+        cards.mapNotNull { it.energy }.distinct().sorted()
+
+    fun availableMightValues(cards: List<RiftboundCard>): List<Int> =
+        cards.mapNotNull { it.might }.distinct().sorted()
+
+    fun availablePowerValues(cards: List<RiftboundCard>): List<Int> =
+        cards.mapNotNull { it.power }.distinct().sorted()
 }

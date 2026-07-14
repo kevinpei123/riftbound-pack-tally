@@ -65,6 +65,7 @@ android {
     testOptions {
         unitTests {
             isReturnDefaultValues = true
+            isIncludeAndroidResources = true
         }
     }
 }
@@ -125,6 +126,16 @@ dependencies {
     // Unit tests
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
+
+    // Migration testing only — Room's MigrationTestHelper needs a real
+    // Android SQLite implementation, which Robolectric provides on the JVM.
+    // Robolectric tests are JUnit4-style; the vintage engine lets the
+    // existing JUnit5 platform runner (useJUnitPlatform()) pick them up.
+    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.junit4)
+    testRuntimeOnly(libs.junit.vintage.engine)
 }
 
 tasks.withType<Test>().configureEach {

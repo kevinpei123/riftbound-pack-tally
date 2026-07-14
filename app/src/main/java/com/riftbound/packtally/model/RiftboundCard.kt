@@ -25,6 +25,11 @@ data class RiftboundCard(
     val imageUrl: String? = null,
     /** Riftbound color/domain labels from `classification.domain[]`, if present. */
     val domains: List<String> = emptyList(),
+    /** Riftcodex `classification.type`, e.g. "unit", "gear", "rune". Empty when unknown. */
+    val type: String = "",
+    val energy: Int? = null,
+    val might: Int? = null,
+    val power: Int? = null,
 )
 
 @Serializable

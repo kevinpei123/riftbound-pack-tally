@@ -22,6 +22,10 @@ data class CardBrowserState(
     val query: CardBrowserQuery = CardBrowserQuery(),
     val availableSetCodes: List<String> = emptyList(),
     val availableDomains: List<String> = emptyList(),
+    val availableTypes: List<String> = emptyList(),
+    val availableEnergyValues: List<Int> = emptyList(),
+    val availableMightValues: List<Int> = emptyList(),
+    val availablePowerValues: List<Int> = emptyList(),
 ) {
     companion object {
         val Empty = CardBrowserState()
@@ -41,6 +45,10 @@ class CardBrowserViewModel(application: Application) : AndroidViewModel(applicat
                 query = query,
                 availableSetCodes = CardBrowserFilter.availableSetCodes(all),
                 availableDomains = CardBrowserFilter.availableDomains(all),
+                availableTypes = CardBrowserFilter.availableTypes(all),
+                availableEnergyValues = CardBrowserFilter.availableEnergyValues(all),
+                availableMightValues = CardBrowserFilter.availableMightValues(all),
+                availablePowerValues = CardBrowserFilter.availablePowerValues(all),
             )
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, CardBrowserState.Empty)
@@ -61,13 +69,37 @@ class CardBrowserViewModel(application: Application) : AndroidViewModel(applicat
         _query.update { it.copy(domains = it.domains.toggled(domain)) }
     }
 
+    fun toggleType(type: String) {
+        _query.update { it.copy(types = it.types.toggled(type)) }
+    }
+
+    fun toggleEnergyValue(value: Int) {
+        _query.update { it.copy(energyValues = it.energyValues.toggled(value)) }
+    }
+
+    fun toggleMightValue(value: Int) {
+        _query.update { it.copy(mightValues = it.mightValues.toggled(value)) }
+    }
+
+    fun togglePowerValue(value: Int) {
+        _query.update { it.copy(powerValues = it.powerValues.toggled(value)) }
+    }
+
     fun setSortOrder(order: CardSortOrder) {
         _query.update { it.copy(sortOrder = order) }
     }
 
     fun clearFilters() {
         _query.update {
-            it.copy(setCodes = emptySet(), rarities = emptySet(), domains = emptySet())
+            it.copy(
+                setCodes = emptySet(),
+                rarities = emptySet(),
+                domains = emptySet(),
+                types = emptySet(),
+                energyValues = emptySet(),
+                mightValues = emptySet(),
+                powerValues = emptySet(),
+            )
         }
     }
 

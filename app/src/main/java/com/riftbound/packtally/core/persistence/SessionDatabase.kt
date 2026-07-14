@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ScanSessionEntryEntity::class,
         CardEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class SessionDatabase : RoomDatabase() {
@@ -26,7 +26,7 @@ abstract class SessionDatabase : RoomDatabase() {
     abstract fun cardDao(): CardDao
 
     companion object {
-        const val SESSION_DB_VERSION: Int = 4
+        const val SESSION_DB_VERSION: Int = 5
 
         // v1 → v2 introduced loose_scans.
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -191,13 +191,26 @@ abstract class SessionDatabase : RoomDatabase() {
             }
         }
 
+        // v4 -> v5 adds card-browser filter columns sourced from Riftcodex's
+        // attributes/classification blocks (see CardDbSync). Existing rows get
+        // the default/NULL below until the next full Riftcodex sync, which
+        // already does a delete+upsert of every row — no backfill needed here.
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cards ADD COLUMN type TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE cards ADD COLUMN energy INTEGER")
+                db.execSQL("ALTER TABLE cards ADD COLUMN might INTEGER")
+                db.execSQL("ALTER TABLE cards ADD COLUMN power INTEGER")
+            }
+        }
+
         fun create(context: Context): SessionDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 SessionDatabase::class.java,
                 "session.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 // No fallbackToDestructiveMigration: an unexpected schema bump
                 // shouldn't lose a user's scan list. Future bumps require a real
                 // Migration.
