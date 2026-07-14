@@ -49,6 +49,9 @@ object CardDatabase {
     /** Number of cards currently loaded. Used by MainActivity to detect a successful sync that nevertheless ended up with an empty table (schema drift, etc.). */
     val size: Int get() = cards.size
 
+    /** Full loaded catalogue, for the card browser. Empty until [initFromRoom] runs. */
+    fun allCards(): List<RiftboundCard> = cards
+
     /**
      * Accepts the printed collector code in several forms:
      *   "ogn-001-298"      (internal id)
@@ -85,6 +88,9 @@ object CardDatabase {
 
     /** Reverse lookup used when restoring loose scans from Room by tcgplayer id. */
     fun lookupByTcgplayerId(id: String): RiftboundCard? = byTcgplayerId[id]
+
+    /** Lookup by the card's own primary-key id, e.g. from a nav argument. */
+    fun lookupById(id: String): RiftboundCard? = byId[id.lowercase()]
 
     fun lookupByNameFuzzy(query: String, limit: Int = 3): List<RiftboundCard> {
         if (!initialized || query.isBlank() || limit <= 0) return emptyList()

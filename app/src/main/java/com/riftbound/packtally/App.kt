@@ -3,6 +3,9 @@ package com.riftbound.packtally
 import android.app.Application
 import android.content.Context
 import androidx.datastore.preferences.preferencesDataStore
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.disk.DiskCache
 import com.riftbound.packtally.core.backup.BackupRepository
 import com.riftbound.packtally.core.carddb.CardDbSync
 import com.riftbound.packtally.core.carddb.RiftcodexClient
@@ -30,7 +33,10 @@ import java.time.Duration
 
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")
 
-class App : Application() {
+/** Card-art disk cache bound — keeps the browser/detail screens' image cache from growing unbounded. */
+private const val CARD_ART_CACHE_BYTES = 50L * 1024 * 1024
+
+class App : Application(), ImageLoaderFactory {
 
     lateinit var pricing: PricingRepository
         private set
@@ -135,6 +141,15 @@ class App : Application() {
             sessionRepository.migrateLegacyPacksIfNeeded()
         }
     }
+
+    override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
+        .diskCache {
+            DiskCache.Builder()
+                .directory(cacheDir.resolve("card_art_cache"))
+                .maxSizeBytes(CARD_ART_CACHE_BYTES)
+                .build()
+        }
+        .build()
 
     suspend fun resetAll() {
         sessionDatabase.clearAllTables()

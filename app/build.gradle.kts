@@ -118,6 +118,10 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.datastore.preferences)
 
+    // Card art (browser + detail screen). Uses the OkHttp already on the
+    // classpath; disk cache is bounded explicitly in App.kt.
+    implementation(libs.coil.compose)
+
     // Unit tests
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)

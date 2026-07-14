@@ -78,6 +78,12 @@ class CachedPricingRepository(
         return results
     }
 
+    /**
+     * Cache-only read for display purposes (e.g. the card detail screen).
+     * Never touches the network or the delegate — a miss just returns null.
+     */
+    suspend fun peekCached(req: PriceRequest): CardPrice? = readFresh(req, ttlProvider())
+
     /** Delete every file under `cacheDir/prices_v2/`. */
     fun clearCache() {
         pricesDir.listFiles()?.forEach { it.delete() }

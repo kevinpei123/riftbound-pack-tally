@@ -23,13 +23,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.riftbound.packtally.App
 import com.riftbound.packtally.core.pricing.QuotaEvent
 import com.riftbound.packtally.feature.backup.BackupScreen
+import com.riftbound.packtally.feature.cardbrowser.CardBrowserScreen
+import com.riftbound.packtally.feature.cardbrowser.CardDetailScreen
 import com.riftbound.packtally.feature.collection.CollectionScreen
 import com.riftbound.packtally.feature.home.HomeScreen
 import com.riftbound.packtally.feature.scanner.ScannerScreen
@@ -107,6 +111,7 @@ fun AppNav() {
                     onNavigateToScanner = { navController.navigateToTab(Destination.Scanner.route) },
                     onNavigateToCurrent = { navController.navigateToTab(Destination.Current.route) },
                     onNavigateToCollection = { navController.navigateToTab(Destination.Collection.route) },
+                    onNavigateToCardBrowser = { navController.navigate(CARD_BROWSER_ROUTE) },
                 )
             }
             composable(Destination.Scanner.route) {
@@ -125,6 +130,22 @@ fun AppNav() {
             }
             composable(BACKUP_ROUTE) {
                 BackupScreen(onNavigateBack = { navController.popBackStack() })
+            }
+            composable(CARD_BROWSER_ROUTE) {
+                CardBrowserScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onCardSelected = { cardId -> navController.navigate(cardDetailRoute(cardId)) },
+                )
+            }
+            composable(
+                CARD_DETAIL_ROUTE,
+                arguments = listOf(navArgument("cardId") { type = NavType.StringType }),
+            ) { backStackEntry ->
+                val cardId = backStackEntry.arguments?.getString("cardId").orEmpty()
+                CardDetailScreen(
+                    cardId = cardId,
+                    onNavigateBack = { navController.popBackStack() },
+                )
             }
         }
     }
@@ -163,8 +184,12 @@ fun AppNav() {
     }
 }
 
-/** Non-tab route. Kept in one place so navigate() and composable() can't drift. */
+/** Non-tab routes. Kept in one place so navigate() and composable() can't drift. */
 private const val BACKUP_ROUTE = "backup"
+private const val CARD_BROWSER_ROUTE = "cardBrowser"
+private const val CARD_DETAIL_ROUTE = "cardDetail/{cardId}"
+
+private fun cardDetailRoute(cardId: String) = "cardDetail/$cardId"
 
 private fun NavController.navigateToTab(route: String) {
     navigate(route) {

@@ -51,6 +51,7 @@ fun HomeScreen(
     onNavigateToScanner: () -> Unit,
     onNavigateToCurrent: () -> Unit,
     onNavigateToCollection: () -> Unit,
+    onNavigateToCardBrowser: () -> Unit,
 ) {
     val vm: HomeViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
@@ -86,6 +87,28 @@ fun HomeScreen(
         )
 
         LastSessionCard(session = state.lastCompletedSession)
+
+        BrowseCardsCard(onOpenBrowser = onNavigateToCardBrowser)
+    }
+}
+
+@Composable
+private fun BrowseCardsCard(onOpenBrowser: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Card database", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Search and browse every Riftbound card, with prices from cache.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = onOpenBrowser, modifier = Modifier.fillMaxWidth()) {
+                Text("Browse cards")
+            }
+        }
     }
 }
 
